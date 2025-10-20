@@ -101,10 +101,12 @@ def init_page() -> None:
         <style>
         div[data-testid="stSidebar"] {display: none;}
         .main {max-width: 900px; margin: 0 auto; padding: 1rem;}
-        section.main div.block-container div.stButton > button {
-            display: block;
-            margin-left: auto;
-            margin-right: auto;
+        section.main div.block-container div.stButton {
+            display: flex;
+            justify-content: center;
+        }
+        section.main div.block-container div.stButton button {
+            min-width: 220px;
         }
         </style>
         """,
