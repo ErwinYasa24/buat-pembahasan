@@ -2,12 +2,13 @@
 
 import os
 import re
+from pathlib import Path
 from typing import Dict, List, Optional
 
+import gspread
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-import gspread
 from google.oauth2.service_account import Credentials
 
 from app.ai_utils import generate_ai_explanations
@@ -17,6 +18,7 @@ from app.config import DEFAULT_MODEL
 DEFAULT_ENV_PATH = ".env"
 GOOGLE_CREDS_ENV = "GOOGLE_SERVICE_ACCOUNT_FILE"
 DEFAULT_CREDS_FILE = "credentials.json"
+DEFAULT_CREDS_PATH = Path(__file__).resolve().parent / DEFAULT_CREDS_FILE
 EXPLANATION_COLUMN = "explanation_ai"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -28,8 +30,9 @@ def load_environment(path: str = DEFAULT_ENV_PATH) -> None:
     """Load environment variables from .env if present."""
     if os.path.exists(path):
         load_dotenv(path)
-    if not os.getenv(GOOGLE_CREDS_ENV) and os.path.exists(DEFAULT_CREDS_FILE):
-        os.environ[GOOGLE_CREDS_ENV] = DEFAULT_CREDS_FILE
+    if not os.getenv(GOOGLE_CREDS_ENV):
+        if DEFAULT_CREDS_PATH.exists():
+            os.environ[GOOGLE_CREDS_ENV] = str(DEFAULT_CREDS_PATH)
 
 
 def extract_spreadsheet_id(user_input: str) -> Optional[str]:
