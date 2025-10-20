@@ -167,7 +167,7 @@ def stage_init(default_creds: Optional[str]) -> None:
     if sheet_input.strip() and creds_final:
         left_spacer, btn_col, right_spacer = st.columns([1, 2, 1])
         with btn_col:
-            clicked = st.button("Muat Spreadsheet", type="primary", use_container_width=True)
+            clicked = st.button("Muat Spreadsheet", type="primary", use_container_width=False)
             if clicked:
                 sheet_id = extract_spreadsheet_id(sheet_input)
                 if not sheet_id:
