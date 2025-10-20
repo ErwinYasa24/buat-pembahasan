@@ -97,14 +97,6 @@ def init_page() -> None:
         <style>
         div[data-testid="stSidebar"] {display: none;}
         .main {max-width: 900px; margin: 0 auto; padding: 1rem;}
-        .centered-button {
-            display: flex;
-            justify-content: center;
-        }
-        .centered-button button {
-            min-width: 240px;
-            width: auto;
-        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -175,11 +167,7 @@ def stage_init(default_creds: Optional[str]) -> None:
     if sheet_input.strip() and creds_final:
         left_spacer, btn_col, right_spacer = st.columns([1, 2, 1])
         with btn_col:
-            placeholder = st.empty()
-            with placeholder.container():
-                st.markdown('<div class="centered-button">', unsafe_allow_html=True)
-                clicked = st.button("Muat Spreadsheet", type="primary", use_container_width=False)
-                st.markdown('</div>', unsafe_allow_html=True)
+            clicked = st.button("Muat Spreadsheet", type="primary", use_container_width=True)
             if clicked:
                 sheet_id = extract_spreadsheet_id(sheet_input)
                 if not sheet_id:
