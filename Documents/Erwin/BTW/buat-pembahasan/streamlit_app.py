@@ -25,18 +25,6 @@ SCOPES = [
 
 
 def centered_button(label: str, key: str, type: str = "primary", disabled: bool = False):
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stVerticalBlock"] div.row-widget.stButton {
-            display: flex;
-            justify-content: center;
-            width: 100%;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     return st.button(label, key=key, type=type, disabled=disabled)
 
 
@@ -113,6 +101,11 @@ def init_page() -> None:
         <style>
         div[data-testid="stSidebar"] {display: none;}
         .main {max-width: 900px; margin: 0 auto; padding: 1rem;}
+        section.main div.block-container div.stButton > button {
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
         </style>
         """,
         unsafe_allow_html=True,
