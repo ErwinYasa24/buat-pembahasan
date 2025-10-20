@@ -101,12 +101,17 @@ def init_page() -> None:
         <style>
         div[data-testid="stSidebar"] {display: none;}
         .main {max-width: 900px; margin: 0 auto; padding: 1rem;}
-        section.main div.block-container div.stButton {
+        div.stButton {
             display: flex;
             justify-content: center;
         }
-        section.main div.block-container div.stButton button {
+        div.stButton button {
+            width: fit-content !important;
             min-width: 220px;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            padding-left: 1.5rem;
+            padding-right: 1.5rem;
         }
         </style>
         """,
