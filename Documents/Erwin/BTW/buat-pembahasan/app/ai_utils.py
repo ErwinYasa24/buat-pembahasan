@@ -21,6 +21,53 @@ def _sanitize_text(value: str) -> str:
     return text.strip()
 
 
+_REASON_PREFIXES = [
+    re.compile(r"^\s*jawaban\s+yang\s+kurang\s+tepat\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*jawaban\s+kurang\s+tepat\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*jawaban\s+salah\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*-\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
+]
+
+
+def _strip_reason_prefix(reason: str) -> str:
+    """Remove repeated labels like 'Jawaban yang kurang tepat' or '- Opsi 1:' from reasons."""
+
+    cleaned = reason.strip()
+    while True:
+        updated = cleaned
+        for pattern in _REASON_PREFIXES:
+            match = pattern.match(updated)
+            if match:
+                updated = updated[match.end() :].strip()
+        updated = updated.lstrip("-: ").strip()
+        if updated == cleaned:
+            break
+        cleaned = updated
+    return cleaned
+
+
+def _strip_option_echo(reason: str, option_text: str) -> str:
+    """Remove duplicated option text at start of reason."""
+
+    cleaned_reason = reason.strip()
+    option_clean = option_text.strip()
+    if not option_clean:
+        return cleaned_reason
+
+    lowered_reason = cleaned_reason.lower()
+    lowered_option = option_clean.lower()
+
+    if lowered_reason.startswith(lowered_option):
+        trimmed = cleaned_reason[len(option_clean) :].lstrip(" :.-").strip()
+        if trimmed:
+            cleaned_reason = trimmed
+        else:
+            cleaned_reason = ""
+
+    return cleaned_reason
+
+
 def _enrich_reason(
     option_text: str,
     reason: str,
@@ -58,21 +105,9 @@ def _enrich_reason(
 
 
 def _infer_correct_indices(row: pd.Series, option_texts: List[str]) -> List[int]:
+    """Determine correct option indices, prioritizing explicit scores."""
+
     indices: List[int] = []
-    for idx, (_, score_col) in enumerate(OPTION_COLUMNS.items()):
-        score = row.get(score_col)
-        if pd.isna(score):
-            continue
-        try:
-            if float(score) > 0:
-                indices.append(idx)
-        except (TypeError, ValueError):
-            continue
-
-    if indices:
-        return indices
-
-    option_number = str(row.get("option_number", "")).strip().upper()
     mapping = {
         "A": 0,
         "B": 1,
@@ -85,6 +120,37 @@ def _infer_correct_indices(row: pd.Series, option_texts: List[str]) -> List[int]
         "PILIHAN D": 3,
         "PILIHAN E": 4,
     }
+
+    scored_options: List[tuple[int, float]] = []
+    option_keys = list(OPTION_COLUMNS.keys())
+    for idx, (_, (_, score_col)) in enumerate(OPTION_COLUMNS.items()):
+        score = row.get(score_col)
+        if pd.isna(score):
+            continue
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            continue
+        scored_options.append((idx, numeric))
+
+    if scored_options:
+        max_score = max(value for _, value in scored_options)
+        for idx, value in scored_options:
+            if value != max_score:
+                continue
+            label = option_keys[idx]
+            if label == "Pilihan":
+                option_letter = str(row.get("option_number", "")).strip().upper()
+                mapped = mapping.get(option_letter)
+                if mapped is not None:
+                    indices.append(mapped)
+            else:
+                indices.append(idx)
+
+    if indices:
+        return list(dict.fromkeys(indices))
+
+    option_number = str(row.get("option_number", "")).strip().upper()
     if option_number in mapping and mapping[option_number] < len(option_texts):
         return [mapping[option_number]]
 
@@ -92,8 +158,14 @@ def _infer_correct_indices(row: pd.Series, option_texts: List[str]) -> List[int]
     if pd.notna(answer_true):
         cleaned_answer = _sanitize_text(answer_true).lower()
         for idx, text in enumerate(option_texts):
-            candidate = text.lower()
-            if cleaned_answer == candidate or cleaned_answer.endswith(candidate) or candidate in cleaned_answer:
+            candidate = text.lower().strip()
+            if not candidate:
+                continue
+            if (
+                cleaned_answer == candidate
+                or cleaned_answer.endswith(candidate)
+                or candidate in cleaned_answer
+            ):
                 indices.append(idx)
         if indices:
             return indices
@@ -108,7 +180,9 @@ def _infer_correct_indices(row: pd.Series, option_texts: List[str]) -> List[int]
         if match:
             answer_segment = match.group(1)
             for idx, text in enumerate(option_texts):
-                candidate = text.lower()
+                candidate = text.lower().strip()
+                if not candidate:
+                    continue
                 if answer_segment.startswith(candidate) or candidate in answer_segment:
                     indices.append(idx)
                     break
@@ -121,15 +195,15 @@ def _infer_correct_indices(row: pd.Series, option_texts: List[str]) -> List[int]
 def build_prompt(row: pd.Series) -> Dict[str, object]:
     question_text = str(row.get("question", "")).strip()
     question_summary = _sanitize_text(question_text)
-    option_map = []
-    options_text = []
-    for label, (text_col, _) in OPTION_COLUMNS.items():
+    option_map: List[str] = []
+    option_instruction_rows: List[str] = []
+    for idx, (label, (text_col, _)) in enumerate(OPTION_COLUMNS.items()):
         option_text = row.get(text_col)
+        cleaned = ""
         if pd.notna(option_text) and str(option_text).strip():
             cleaned = _sanitize_text(option_text)
-            option_map.append(cleaned)
-            options_text.append(cleaned)
-    options_str = "\n".join(options_text) if options_text else "(Tidak ada pilihan)"
+            option_instruction_rows.append(f"Opsi {idx + 1}: {cleaned}")
+        option_map.append(cleaned)
 
     tags = row.get("tags")
     metadata_parts = [
@@ -145,8 +219,8 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
         "<p style=\"text-align:justify\">Paragraf penjelasan lanjutan...</p>\n"
         "<p style=\"text-align:justify\"><strong>Jawaban yang kurang tepat:</strong></p>\n"
-        "<p style=\"text-align:justify\"><strong>- Opsi salah 1:</strong> alasan singkat...</p>\n"
-        "<p style=\"text-align:justify\"><strong>- Opsi salah 2:</strong> alasan singkat...</p>"
+        "<p style=\"text-align:justify\"><strong>Opsi salah 1:</strong> alasan singkat...</p>\n"
+        "<p style=\"text-align:justify\"><strong>Opsi salah 2:</strong> alasan singkat...</p>"
     )
 
     instructions = (
@@ -158,7 +232,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Paragraf pertama harus menyatakan jawaban benar dengan awalan 'Jawaban yang tepat:' diikuti penjelasan singkat. Sertakan teks opsi benar secara utuh sebelum penjelasan.\n"
         "- Paragraf kedua (dan tambahan bila perlu) menjelaskan alasan jawaban benar secara detail (minimal 2 kalimat).\n"
         "- Gunakan paragraf ketiga dengan teks 'Jawaban yang kurang tepat:' (bold).\n"
-        "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '<strong>- ...:</strong> penjelasan...'. Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. Setiap alasan minimal dua kalimat yang jelas.\n"
+        "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '<strong>...:</strong> penjelasan...'. Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. Setiap alasan minimal dua kalimat yang jelas.\n"
         "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menulis ulang opsi yang benar di bagian opsi salah.\n"
         "- Nilai `correct_summary` hanya berisi penjelasan singkat (tanpa kembali menuliskan frasa 'Jawaban yang tepat'). Jika tidak ada penjelasan tambahan, kosongkan string tersebut.\n"
@@ -167,15 +241,26 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Gunakan style 'text-align:justify' pada setiap tag <p> dan <strong> untuk penekanan."
     )
 
-    option_instructions = "\n".join(
-        f"Opsi {idx + 1}: {text}" for idx, text in enumerate(option_map)
-    )
+    option_instructions = "\n".join(option_instruction_rows)
+    if not option_instructions:
+        option_instructions = "(Tidak ada pilihan)"
 
     correct_indices = _infer_correct_indices(row, option_map)
-    incorrect_indices = [idx for idx in range(len(option_map)) if idx not in correct_indices]
+    if correct_indices:
+        textful = [idx for idx in correct_indices if idx < len(option_map) and option_map[idx]]
+        if textful:
+            leftovers = [idx for idx in correct_indices if idx not in textful]
+            correct_indices = textful + leftovers
+
+    incorrect_indices = [
+        idx for idx in range(len(option_map))
+        if idx not in correct_indices and idx < len(option_map) and option_map[idx]
+    ]
 
     correct_option_display = "\n".join(
-        f"Opsi {idx + 1}: {option_map[idx]}" for idx in correct_indices if idx < len(option_map)
+        f"Opsi {idx + 1}: {option_map[idx]}"
+        for idx in correct_indices
+        if idx < len(option_map) and option_map[idx]
     ) or "(Tidak diketahui)"
 
     context = (
@@ -292,6 +377,7 @@ def generate_ai_explanations(
             incorrect_reasons = data.get("incorrect_reasons") or {}
 
             html_parts: List[str] = []
+
             if not correct_summary and correct_indices:
                 first_idx = correct_indices[0]
                 if first_idx < len(option_map):
@@ -303,34 +389,41 @@ def generate_ai_explanations(
                 if idx0 < len(option_map):
                     main_option = option_map[idx0].strip()
 
+            primary_text = ""
+            explanation = ""
+
             if correct_summary or main_option:
                 correct_text = _sanitize_text(correct_summary)
                 correct_text = re.sub(
                     r"^jawaban yang tepat[\s:,-]*", "", correct_text, flags=re.IGNORECASE
-                )
+                ).strip()
 
-                explanation = correct_text.lstrip(" :.\-") if correct_text else ""
-                explanation = explanation.strip()
-                if explanation.lower() == (main_option or "").lower():
-                    explanation = ""
+                if not main_option and correct_text:
+                    lowered = correct_text.lower()
+                    for text in option_map:
+                        if text and text.lower() == lowered:
+                            main_option = text
+                            break
 
                 if main_option:
-                    if explanation:
-                        combined = (
-                            explanation
-                            if explanation.lower().startswith(main_option.lower())
-                            else f"{main_option}: {explanation}"
-                        )
-                    else:
-                        combined = main_option
+                    primary_text = main_option
+                    explanation = _strip_option_echo(correct_text, main_option)
                 else:
-                    combined = explanation or main_option or ""
+                    primary_text = correct_text
+                    explanation = ""
 
-                combined = combined.strip()
-                if combined:
+                primary_text = primary_text.strip()
+                if primary_text:
                     html_parts.append(
-                        f"<p style=\"text-align:justify\"><strong>Jawaban yang tepat: {combined}</strong></p>"
+                        f"<p style=\"text-align:justify\"><strong>Jawaban yang tepat: {primary_text}</strong></p>"
                     )
+
+                explanation = explanation.strip()
+                if explanation and explanation.lower() == primary_text.lower():
+                    explanation = ""
+
+                if explanation:
+                    detail_paragraphs.insert(0, explanation)
 
             explanation_paragraphs_added = 0
             for paragraph in detail_paragraphs:
@@ -344,6 +437,7 @@ def generate_ai_explanations(
                     or lowered.startswith("- opsi")
                     or lowered.startswith("opsi")
                     or lowered.startswith("- pilihan")
+                    or lowered.startswith("- ")
                 ):
                     continue
                 html_parts.append(
@@ -368,8 +462,14 @@ def generate_ai_explanations(
                     if idx >= len(option_map):
                         continue
                     option_text = option_map[idx]
+                    if not option_text:
+                        continue
+                    if main_option and option_text.strip().lower() == main_option.strip().lower():
+                        continue
                     reason = str(incorrect_reasons.get(str(idx + 1), "")).strip()
                     reason = _sanitize_text(reason)
+                    reason = _strip_reason_prefix(reason)
+                    reason = _strip_option_echo(reason, option_text)
                     reason = _enrich_reason(option_text, reason, main_option, question_summary)
                     html_parts.append(
                         f"<p style=\"text-align:justify\"><strong>{option_text}:</strong> {reason}</p>"
