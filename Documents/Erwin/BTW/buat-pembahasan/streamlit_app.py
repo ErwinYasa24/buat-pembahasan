@@ -28,6 +28,8 @@ def load_environment(path: str = DEFAULT_ENV_PATH) -> None:
     """Load environment variables from .env if present."""
     if os.path.exists(path):
         load_dotenv(path)
+    if not os.getenv(GOOGLE_CREDS_ENV) and os.path.exists(DEFAULT_CREDS_FILE):
+        os.environ[GOOGLE_CREDS_ENV] = DEFAULT_CREDS_FILE
 
 
 def extract_spreadsheet_id(user_input: str) -> Optional[str]:
