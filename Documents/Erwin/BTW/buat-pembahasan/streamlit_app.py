@@ -25,7 +25,15 @@ SCOPES = [
 
 
 def centered_button(label: str, key: str, type: str = "primary", disabled: bool = False):
-    return st.button(label, key=key, type=type, disabled=disabled)
+    col_left, col_center, col_right = st.columns([3, 2, 3])
+    with col_center:
+        return st.button(
+            label,
+            key=key,
+            type=type,
+            disabled=disabled,
+            use_container_width=True,
+        )
 
 
 def load_environment(path: str = DEFAULT_ENV_PATH) -> None:
@@ -101,18 +109,6 @@ def init_page() -> None:
         <style>
         div[data-testid="stSidebar"] {display: none;}
         .main {max-width: 900px; margin: 0 auto; padding: 1rem;}
-        div.stButton {
-            display: flex;
-            justify-content: center;
-        }
-        div.stButton button {
-            width: fit-content !important;
-            min-width: 220px;
-            margin-left: auto !important;
-            margin-right: auto !important;
-            padding-left: 1.5rem;
-            padding-right: 1.5rem;
-        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -181,37 +177,35 @@ def stage_init(default_creds: Optional[str]) -> None:
 
     creds_final = st.session_state.get("client_creds")
     if sheet_input.strip() and creds_final:
-        left_spacer, btn_col, right_spacer = st.columns([1, 2, 1])
-        with btn_col:
-            # Tombol untuk memuat spreadsheet pertama kali
-            clicked = centered_button(
-                "Muat Spreadsheet",
-                key="load_sheet",
-            )
-            if clicked:
-                sheet_id = extract_spreadsheet_id(sheet_input)
-                if not sheet_id:
+        # Tombol untuk memuat spreadsheet pertama kali
+        clicked = centered_button(
+            "Muat Spreadsheet",
+            key="load_sheet",
+        )
+        if clicked:
+            sheet_id = extract_spreadsheet_id(sheet_input)
+            if not sheet_id:
+                with col_mid:
+                    st.error("Masukkan link atau ID Google Sheet yang valid.")
+            else:
+                try:
+                    client = get_gspread_client(creds_final)
+                    spreadsheet = client.open_by_key(sheet_id)
+                    sheet_names = [ws.title for ws in spreadsheet.worksheets()]
+                    st.session_state["spreadsheet_id"] = sheet_id
+                    st.session_state["spreadsheet_name"] = spreadsheet.title
+                    st.session_state["sheet_names"] = sheet_names
+                    st.session_state["worksheet_title"] = sheet_names[0] if sheet_names else None
+                    st.session_state["dataframes"] = {}
+                    st.session_state["worksheet_objs"] = {}
+                    st.session_state["explanation_cols"] = {}
+                    st.session_state["last_update_summary"] = []
                     with col_mid:
-                        st.error("Masukkan link atau ID Google Sheet yang valid.")
-                else:
-                    try:
-                        client = get_gspread_client(creds_final)
-                        spreadsheet = client.open_by_key(sheet_id)
-                        sheet_names = [ws.title for ws in spreadsheet.worksheets()]
-                        st.session_state["spreadsheet_id"] = sheet_id
-                        st.session_state["spreadsheet_name"] = spreadsheet.title
-                        st.session_state["sheet_names"] = sheet_names
-                        st.session_state["worksheet_title"] = sheet_names[0] if sheet_names else None
-                        st.session_state["dataframes"] = {}
-                        st.session_state["worksheet_objs"] = {}
-                        st.session_state["explanation_cols"] = {}
-                        st.session_state["last_update_summary"] = []
-                        with col_mid:
-                            st.success(f"Berhasil memuat spreadsheet: {spreadsheet.title}")
-                        set_stage("loaded")
-                    except Exception as exc:  # pragma: no cover
-                        with col_mid:
-                            st.error(f"Gagal memuat spreadsheet: {exc}")
+                        st.success(f"Berhasil memuat spreadsheet: {spreadsheet.title}")
+                    set_stage("loaded")
+                except Exception as exc:  # pragma: no cover
+                    with col_mid:
+                        st.error(f"Gagal memuat spreadsheet: {exc}")
     else:
         with col_mid:
             st.info("Masukkan link dan kredensial untuk menampilkan tombol muat.")
@@ -235,44 +229,42 @@ def stage_loaded() -> None:
     st.session_state["selected_sheets"] = selected
 
     disabled = len(selected) == 0
-    _, btn_col, _ = st.columns([1, 2, 1])
-    with btn_col:
-        # Tombol untuk menarik data dari worksheet terpilih
-        fetch_clicked = centered_button(
-            "Ambil Data Worksheet",
-            disabled=disabled,
-            key="fetch_data",
-        )
-        if fetch_clicked:
-            creds_final = st.session_state.get("client_creds")
-            sheet_id = st.session_state.get("spreadsheet_id")
-            if not creds_final or not sheet_id:
-                st.error("Spreadsheet atau kredensial belum siap.")
-                return
-            try:
-                client = get_gspread_client(creds_final)
-                spreadsheet = client.open_by_key(sheet_id)
-                new_df_map: Dict[str, pd.DataFrame] = {}
-                new_worksheet_objs: Dict[str, gspread.Worksheet] = {}
-                new_explanation_cols: Dict[str, int] = {}
+    # Tombol untuk menarik data dari worksheet terpilih
+    fetch_clicked = centered_button(
+        "Ambil Data Worksheet",
+        disabled=disabled,
+        key="fetch_data",
+    )
+    if fetch_clicked:
+        creds_final = st.session_state.get("client_creds")
+        sheet_id = st.session_state.get("spreadsheet_id")
+        if not creds_final or not sheet_id:
+            st.error("Spreadsheet atau kredensial belum siap.")
+            return
+        try:
+            client = get_gspread_client(creds_final)
+            spreadsheet = client.open_by_key(sheet_id)
+            new_df_map: Dict[str, pd.DataFrame] = {}
+            new_worksheet_objs: Dict[str, gspread.Worksheet] = {}
+            new_explanation_cols: Dict[str, int] = {}
 
-                for sheet in selected:
-                    worksheet = spreadsheet.worksheet(sheet)
-                    headers = [h.strip() for h in worksheet.row_values(1)]
-                    explanation_col_index = ensure_explanation_column(worksheet, headers)
-                    sheet_df = fetch_dataframe(worksheet)
-                    new_df_map[sheet] = sheet_df
-                    new_worksheet_objs[sheet] = worksheet
-                    new_explanation_cols[sheet] = explanation_col_index
+            for sheet in selected:
+                worksheet = spreadsheet.worksheet(sheet)
+                headers = [h.strip() for h in worksheet.row_values(1)]
+                explanation_col_index = ensure_explanation_column(worksheet, headers)
+                sheet_df = fetch_dataframe(worksheet)
+                new_df_map[sheet] = sheet_df
+                new_worksheet_objs[sheet] = worksheet
+                new_explanation_cols[sheet] = explanation_col_index
 
-                st.session_state["dataframes"] = new_df_map
-                st.session_state["worksheet_objs"] = new_worksheet_objs
-                st.session_state["explanation_cols"] = new_explanation_cols
-                st.session_state["last_update_summary"] = []
-                st.success("Berhasil mengambil data dari worksheet terpilih.")
-                set_stage("fetched")
-            except Exception as exc:  # pragma: no cover
-                st.error(f"Gagal mengambil data worksheet: {exc}")
+            st.session_state["dataframes"] = new_df_map
+            st.session_state["worksheet_objs"] = new_worksheet_objs
+            st.session_state["explanation_cols"] = new_explanation_cols
+            st.session_state["last_update_summary"] = []
+            st.success("Berhasil mengambil data dari worksheet terpilih.")
+            set_stage("fetched")
+        except Exception as exc:  # pragma: no cover
+            st.error(f"Gagal mengambil data worksheet: {exc}")
 
 
 def display_tabs(df_map: Dict[str, pd.DataFrame]) -> None:
@@ -301,84 +293,82 @@ def stage_fetched(default_mode: int = 0) -> None:
         key="mode_select",
     )
 
-    _, btn_col, _ = st.columns([1, 2, 1])
-    with btn_col:
-        # Tombol untuk menjalankan generasi pembahasan AI
-        generate_clicked = centered_button(
-            "Generate Pembahasan AI",
-            key="generate_ai",
-        )
-        if generate_clicked:
-            creds_final = st.session_state.get("client_creds")
-            sheet_id = st.session_state.get("spreadsheet_id")
-            if not creds_final or not sheet_id:
-                st.error("Kredensial atau spreadsheet belum siap.")
-                return
+    # Tombol untuk menjalankan generasi pembahasan AI
+    generate_clicked = centered_button(
+        "Generate Pembahasan AI",
+        key="generate_ai",
+    )
+    if generate_clicked:
+        creds_final = st.session_state.get("client_creds")
+        sheet_id = st.session_state.get("spreadsheet_id")
+        if not creds_final or not sheet_id:
+            st.error("Kredensial atau spreadsheet belum siap.")
+            return
 
-            client = get_gspread_client(creds_final)
-            spreadsheet = client.open_by_key(sheet_id)
+        client = get_gspread_client(creds_final)
+        spreadsheet = client.open_by_key(sheet_id)
 
-            worksheet_objs = st.session_state.get("worksheet_objs", {})
-            explanation_cols = st.session_state.get("explanation_cols", {})
+        worksheet_objs = st.session_state.get("worksheet_objs", {})
+        explanation_cols = st.session_state.get("explanation_cols", {})
 
-            updated_any = False
-            sheet_summaries: List[str] = []
+        updated_any = False
+        sheet_summaries: List[str] = []
 
-            for sheet_name, sheet_df in df_map.items():
-                worksheet = worksheet_objs.get(sheet_name)
-                if worksheet is None:
-                    worksheet = spreadsheet.worksheet(sheet_name)
-                    headers = [h.strip() for h in worksheet.row_values(1)]
-                    explanation_cols[sheet_name] = ensure_explanation_column(
-                        worksheet, headers
-                    )
-                    worksheet_objs[sheet_name] = worksheet
+        for sheet_name, sheet_df in df_map.items():
+            worksheet = worksheet_objs.get(sheet_name)
+            if worksheet is None:
+                worksheet = spreadsheet.worksheet(sheet_name)
+                headers = [h.strip() for h in worksheet.row_values(1)]
+                explanation_cols[sheet_name] = ensure_explanation_column(
+                    worksheet, headers
+                )
+                worksheet_objs[sheet_name] = worksheet
 
-                if mode == "Hanya baris kosong":
-                    mask = (
-                        sheet_df[EXPLANATION_COLUMN].astype(str).str.strip().eq("")
-                        | sheet_df[EXPLANATION_COLUMN].isna()
-                    )
-                    target_indices = sheet_df[mask].index.tolist()
-                else:
-                    target_indices = sheet_df.index.tolist()
-
-                if not target_indices:
-                    sheet_summaries.append(
-                        f"{sheet_name}: tidak ada baris yang perlu diproses."
-                    )
-                    continue
-
-                with st.spinner(f"Memproses {sheet_name}..."):
-                    updated_rows = generate_ai_explanations(
-                        sheet_df,
-                        target_indices,
-                        model_name=DEFAULT_MODEL,
-                    )
-
-                if updated_rows:
-                    df_map[sheet_name] = sheet_df
-                    updated_any = True
-                    sheet_summaries.append(
-                        f"{sheet_name}: {len(updated_rows)} baris diperbarui."
-                    )
-                else:
-                    sheet_summaries.append(
-                        f"{sheet_name}: tidak ada baris yang diperbarui."
-                    )
-
-            st.session_state["dataframes"] = df_map
-            st.session_state["worksheet_objs"] = worksheet_objs
-            st.session_state["explanation_cols"] = explanation_cols
-            st.session_state["last_update_summary"] = sheet_summaries
-
-            if updated_any:
-                st.success("Pembahasan berhasil diperbarui. Simpan perubahan ke Google Sheets.")
-                set_stage("generated", pending_save=True)
+            if mode == "Hanya baris kosong":
+                mask = (
+                    sheet_df[EXPLANATION_COLUMN].astype(str).str.strip().eq("")
+                    | sheet_df[EXPLANATION_COLUMN].isna()
+                )
+                target_indices = sheet_df[mask].index.tolist()
             else:
-                st.warning("Tidak ada baris yang berhasil diperbarui.")
-                st.session_state["stage"] = "fetched"
-                st.session_state["pending_save"] = False
+                target_indices = sheet_df.index.tolist()
+
+            if not target_indices:
+                sheet_summaries.append(
+                    f"{sheet_name}: tidak ada baris yang perlu diproses."
+                )
+                continue
+
+            with st.spinner(f"Memproses {sheet_name}..."):
+                updated_rows = generate_ai_explanations(
+                    sheet_df,
+                    target_indices,
+                    model_name=DEFAULT_MODEL,
+                )
+
+            if updated_rows:
+                df_map[sheet_name] = sheet_df
+                updated_any = True
+                sheet_summaries.append(
+                    f"{sheet_name}: {len(updated_rows)} baris diperbarui."
+                )
+            else:
+                sheet_summaries.append(
+                    f"{sheet_name}: tidak ada baris yang diperbarui."
+                )
+
+        st.session_state["dataframes"] = df_map
+        st.session_state["worksheet_objs"] = worksheet_objs
+        st.session_state["explanation_cols"] = explanation_cols
+        st.session_state["last_update_summary"] = sheet_summaries
+
+        if updated_any:
+            st.success("Pembahasan berhasil diperbarui. Simpan perubahan ke Google Sheets.")
+            set_stage("generated", pending_save=True)
+        else:
+            st.warning("Tidak ada baris yang berhasil diperbarui.")
+            st.session_state["stage"] = "fetched"
+            st.session_state["pending_save"] = False
 
 
 def show_summary() -> None:
@@ -391,38 +381,36 @@ def show_summary() -> None:
 
 def stage_generated() -> None:
     show_summary()
-    _, btn_col, _ = st.columns([1, 2, 1])
-    with btn_col:
-        # Tombol untuk menyimpan hasil pembahasan kembali ke Google Sheets
-        save_clicked = centered_button(
-            "Simpan ke Google Sheets",
-            key="save_sheet",
-        )
-        if save_clicked:
-            df_map = st.session_state.get("dataframes", {})
-            worksheet_objs = st.session_state.get("worksheet_objs", {})
-            explanation_cols = st.session_state.get("explanation_cols", {})
+    # Tombol untuk menyimpan hasil pembahasan kembali ke Google Sheets
+    save_clicked = centered_button(
+        "Simpan ke Google Sheets",
+        key="save_sheet",
+    )
+    if save_clicked:
+        df_map = st.session_state.get("dataframes", {})
+        worksheet_objs = st.session_state.get("worksheet_objs", {})
+        explanation_cols = st.session_state.get("explanation_cols", {})
 
-            save_errors = []
-            for sheet_name, sheet_df in df_map.items():
-                worksheet = worksheet_objs.get(sheet_name)
-                col_index = explanation_cols.get(sheet_name)
-                if worksheet is None or col_index is None:
-                    save_errors.append(sheet_name)
-                    continue
-                try:
-                    values = sheet_df[EXPLANATION_COLUMN].fillna("").astype(str).tolist()
-                    update_explanation_column(worksheet, col_index, values)
-                except Exception as exc:  # pragma: no cover
-                    save_errors.append(f"{sheet_name} ({exc})")
+        save_errors = []
+        for sheet_name, sheet_df in df_map.items():
+            worksheet = worksheet_objs.get(sheet_name)
+            col_index = explanation_cols.get(sheet_name)
+            if worksheet is None or col_index is None:
+                save_errors.append(sheet_name)
+                continue
+            try:
+                values = sheet_df[EXPLANATION_COLUMN].fillna("").astype(str).tolist()
+                update_explanation_column(worksheet, col_index, values)
+            except Exception as exc:  # pragma: no cover
+                save_errors.append(f"{sheet_name} ({exc})")
 
-            if save_errors:
-                st.error(
-                    "Gagal menyimpan untuk sheet: " + ", ".join(save_errors)
-                )
-            else:
-                st.success("Berhasil menyimpan kolom explanation_ai ke Google Sheets.")
-                set_stage("saved")
+        if save_errors:
+            st.error(
+                "Gagal menyimpan untuk sheet: " + ", ".join(save_errors)
+            )
+        else:
+            st.success("Berhasil menyimpan kolom explanation_ai ke Google Sheets.")
+            set_stage("saved")
 
 
 def stage_saved() -> None:
