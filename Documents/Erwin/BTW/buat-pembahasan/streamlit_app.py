@@ -95,13 +95,13 @@ def init_page() -> None:
     st.markdown(
         """
         <style>
-        div[data-testid=\"stSidebar\"] {display: none;}
+        div[data-testid="stSidebar"] {display: none;}
         .main {max-width: 900px; margin: 0 auto; padding: 1rem;}
-        div[data-testid=\"stButton\"] {
+        .centered-button {
             display: flex;
             justify-content: center;
         }
-        div[data-testid=\"stButton\"] > button {
+        .centered-button button {
             min-width: 240px;
             width: auto;
         }
@@ -173,9 +173,14 @@ def stage_init(default_creds: Optional[str]) -> None:
 
     creds_final = st.session_state.get("client_creds")
     if sheet_input.strip() and creds_final:
-        _, btn_col, _ = st.columns([1, 2, 1])
+        left_spacer, btn_col, right_spacer = st.columns([1, 2, 1])
         with btn_col:
-            if st.button("Muat Spreadsheet", type="primary"):
+            placeholder = st.empty()
+            with placeholder.container():
+                st.markdown('<div class="centered-button">', unsafe_allow_html=True)
+                clicked = st.button("Muat Spreadsheet", type="primary", use_container_width=False)
+                st.markdown('</div>', unsafe_allow_html=True)
+            if clicked:
                 sheet_id = extract_spreadsheet_id(sheet_input)
                 if not sheet_id:
                     with col_mid:
