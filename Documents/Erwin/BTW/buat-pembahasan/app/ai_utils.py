@@ -25,6 +25,7 @@ _REASON_PREFIXES = [
     re.compile(r"^\s*jawaban\s+yang\s+kurang\s+tepat\s*[:\-]*\s*", re.IGNORECASE),
     re.compile(r"^\s*jawaban\s+kurang\s+tepat\s*[:\-]*\s*", re.IGNORECASE),
     re.compile(r"^\s*jawaban\s+salah\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*opsi\s+salah\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
     re.compile(r"^\s*-\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
     re.compile(r"^\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
 ]
@@ -55,15 +56,17 @@ def _strip_option_echo(reason: str, option_text: str) -> str:
     if not option_clean:
         return cleaned_reason
 
-    lowered_reason = cleaned_reason.lower()
     lowered_option = option_clean.lower()
 
-    if lowered_reason.startswith(lowered_option):
-        trimmed = cleaned_reason[len(option_clean) :].lstrip(" :.-").strip()
-        if trimmed:
-            cleaned_reason = trimmed
-        else:
+    while True:
+        lowered_reason = cleaned_reason.lower()
+        if not lowered_reason.startswith(lowered_option):
+            break
+        trimmed = cleaned_reason[len(option_clean) :].lstrip(" ,:.-").strip()
+        if not trimmed:
             cleaned_reason = ""
+            break
+        cleaned_reason = trimmed
 
     return cleaned_reason
 
