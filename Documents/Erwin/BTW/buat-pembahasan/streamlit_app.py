@@ -24,6 +24,22 @@ SCOPES = [
 ]
 
 
+def centered_button(label: str, key: str, type: str = "primary", disabled: bool = False):
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stVerticalBlock"] div.row-widget.stButton {
+            display: flex;
+            justify-content: center;
+            width: 100%;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    return st.button(label, key=key, type=type, disabled=disabled)
+
+
 def load_environment(path: str = DEFAULT_ENV_PATH) -> None:
     """Load environment variables from .env if present."""
     if os.path.exists(path):
@@ -97,12 +113,6 @@ def init_page() -> None:
         <style>
         div[data-testid="stSidebar"] {display: none;}
         .main {max-width: 900px; margin: 0 auto; padding: 1rem;}
-        .centered-button {
-            display: flex;
-            justify-content: center;
-            margin-top: 1rem;
-            margin-bottom: 1rem;
-        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -174,13 +184,10 @@ def stage_init(default_creds: Optional[str]) -> None:
         left_spacer, btn_col, right_spacer = st.columns([1, 2, 1])
         with btn_col:
             # Tombol untuk memuat spreadsheet pertama kali
-            st.markdown('<div class="centered-button">', unsafe_allow_html=True)
-            clicked = st.button(
+            clicked = centered_button(
                 "Muat Spreadsheet",
-                type="primary",
                 key="load_sheet",
             )
-            st.markdown("</div>", unsafe_allow_html=True)
             if clicked:
                 sheet_id = extract_spreadsheet_id(sheet_input)
                 if not sheet_id:
@@ -231,14 +238,11 @@ def stage_loaded() -> None:
     _, btn_col, _ = st.columns([1, 2, 1])
     with btn_col:
         # Tombol untuk menarik data dari worksheet terpilih
-        st.markdown('<div class="centered-button">', unsafe_allow_html=True)
-        fetch_clicked = st.button(
+        fetch_clicked = centered_button(
             "Ambil Data Worksheet",
-            type="primary",
             disabled=disabled,
             key="fetch_data",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
         if fetch_clicked:
             creds_final = st.session_state.get("client_creds")
             sheet_id = st.session_state.get("spreadsheet_id")
@@ -300,13 +304,10 @@ def stage_fetched(default_mode: int = 0) -> None:
     _, btn_col, _ = st.columns([1, 2, 1])
     with btn_col:
         # Tombol untuk menjalankan generasi pembahasan AI
-        st.markdown('<div class="centered-button">', unsafe_allow_html=True)
-        generate_clicked = st.button(
+        generate_clicked = centered_button(
             "Generate Pembahasan AI",
-            type="primary",
             key="generate_ai",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
         if generate_clicked:
             creds_final = st.session_state.get("client_creds")
             sheet_id = st.session_state.get("spreadsheet_id")
@@ -393,13 +394,10 @@ def stage_generated() -> None:
     _, btn_col, _ = st.columns([1, 2, 1])
     with btn_col:
         # Tombol untuk menyimpan hasil pembahasan kembali ke Google Sheets
-        st.markdown('<div class="centered-button">', unsafe_allow_html=True)
-        save_clicked = st.button(
+        save_clicked = centered_button(
             "Simpan ke Google Sheets",
-            type="primary",
             key="save_sheet",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
         if save_clicked:
             df_map = st.session_state.get("dataframes", {})
             worksheet_objs = st.session_state.get("worksheet_objs", {})
