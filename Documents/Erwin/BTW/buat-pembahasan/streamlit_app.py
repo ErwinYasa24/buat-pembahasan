@@ -167,7 +167,9 @@ def stage_init(default_creds: Optional[str]) -> None:
     if sheet_input.strip() and creds_final:
         left_spacer, btn_col, right_spacer = st.columns([1, 2, 1])
         with btn_col:
+            st.markdown("<p style='text-align:center;'>", unsafe_allow_html=True)
             clicked = st.button("Muat Spreadsheet", type="primary", use_container_width=False)
+            st.markdown("</p>", unsafe_allow_html=True)
             if clicked:
                 sheet_id = extract_spreadsheet_id(sheet_input)
                 if not sheet_id:
