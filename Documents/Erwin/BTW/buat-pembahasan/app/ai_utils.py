@@ -71,6 +71,26 @@ def _strip_option_echo(reason: str, option_text: str) -> str:
     return cleaned_reason
 
 
+def _capitalize_sentence(text: str) -> str:
+    """Capitalize the first alphabetic character unless preceded by a colon."""
+
+    cleaned = text.strip()
+    if not cleaned:
+        return cleaned
+
+    prefix, sep, suffix = cleaned.partition(":")
+    if sep and suffix.strip():
+        return cleaned
+
+    for idx, char in enumerate(cleaned):
+        if char.isalpha():
+            return cleaned[:idx] + char.upper() + cleaned[idx + 1 :]
+        if char.isdigit():
+            return cleaned
+
+    return cleaned
+
+
 def _enrich_reason(
     option_text: str,
     reason: str,
