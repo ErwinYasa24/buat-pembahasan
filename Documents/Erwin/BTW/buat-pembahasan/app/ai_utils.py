@@ -433,7 +433,16 @@ def generate_ai_explanations(
                     )
 
                 if explanation_core:
-                    detail_paragraphs.insert(0, explanation_core)
+                    explanation_sentence = explanation_core.strip()
+                    if explanation_sentence:
+                        explanation_sentence = explanation_sentence[0].upper() + explanation_sentence[1:]
+                        if explanation_sentence[-1] not in ".!?":
+                            explanation_sentence += "."
+                        if detail_paragraphs:
+                            detail_paragraphs = list(detail_paragraphs)
+                            detail_paragraphs[0] = f"{explanation_sentence} {str(detail_paragraphs[0]).lstrip()}"
+                        else:
+                            detail_paragraphs = [explanation_sentence]
 
             explanation_paragraphs_added = 0
             for paragraph in detail_paragraphs:
