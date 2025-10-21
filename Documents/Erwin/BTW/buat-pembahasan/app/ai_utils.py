@@ -88,13 +88,17 @@ def _enrich_reason(
 
     supplements: List[str] = []
     if sentence_count < 2 or word_count < 25:
-        if correct_text:
+        if option_text and correct_text:
             supplements.append(
-                f"Opsi ini tidak menegaskan aspek utama '{correct_text}' sehingga kurang relevan dengan tujuan soal."
+                f"Penjelasan ini masih menyoroti {option_text} tanpa mengaitkannya dengan inti soal mengenai {correct_text}."
             )
-        if not supplements:
+        elif correct_text:
             supplements.append(
-                "Penalaran perlu menunjukkan mengapa opsi ini tidak menutup kebutuhan soal sehingga tidak layak dipilih."
+                f"Penjelasan ini belum menunjukkan keterkaitan dengan tuntutan soal tentang {correct_text}."
+            )
+        else:
+            supplements.append(
+                "Alasan perlu menyebutkan secara spesifik mengapa pilihan ini tidak memenuhi kebutuhan soal."
             )
 
     enriched = cleaned_reason
