@@ -427,14 +427,13 @@ def generate_ai_explanations(
                 if explanation_core and explanation_core.lower() == primary_text.lower():
                     explanation_core = ""
 
-                joint_paragraph = (
-                    primary_text + (" " + explanation_core if explanation_core else "")
-                ).strip()
-
-                if joint_paragraph:
+                if primary_text:
                     html_parts.append(
-                        f"<p style=\"text-align:justify\"><strong>Jawaban yang tepat: {joint_paragraph}</strong></p>"
+                        f"<p style=\"text-align:justify\"><strong>Jawaban yang tepat: {primary_text}</strong></p>"
                     )
+
+                if explanation_core:
+                    detail_paragraphs.insert(0, explanation_core)
 
             explanation_paragraphs_added = 0
             for paragraph in detail_paragraphs:
