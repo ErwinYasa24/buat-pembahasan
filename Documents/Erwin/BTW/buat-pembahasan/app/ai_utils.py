@@ -110,15 +110,15 @@ def _enrich_reason(
     if sentence_count < 2 or word_count < 25:
         if option_text and correct_text:
             supplements.append(
-                f"Penjelasan ini masih menyoroti {option_text} tanpa mengaitkannya dengan inti soal mengenai {correct_text}."
+                f"penjelasan ini masih menyoroti {option_text} tanpa mengaitkannya dengan inti soal mengenai {correct_text}."
             )
         elif correct_text:
             supplements.append(
-                f"Penjelasan ini belum menunjukkan keterkaitan dengan tuntutan soal tentang {correct_text}."
+                f"penjelasan ini belum menunjukkan keterkaitan dengan tuntutan soal tentang {correct_text}."
             )
         else:
             supplements.append(
-                "Alasan perlu menyebutkan secara spesifik mengapa pilihan ini tidak memenuhi kebutuhan soal."
+                "penjelasan perlu menyebutkan secara spesifik mengapa pilihan ini tidak memenuhi kebutuhan soal."
             )
 
     enriched = cleaned_reason
@@ -260,6 +260,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Paragraf kedua (dan tambahan bila perlu) menjelaskan alasan jawaban benar secara detail (minimal 2 kalimat).\n"
         "- Gunakan paragraf ketiga dengan teks 'Jawaban yang kurang tepat:' (bold).\n"
         "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '<strong>...:</strong> penjelasan...'. Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. Setiap alasan minimal dua kalimat yang jelas.\n"
+        "- Setelah titik dua pada opsi salah, lanjutkan kalimat dengan huruf kecil kecuali untuk nama diri atau kata 'Anda'.\n"
         "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menulis ulang opsi yang benar di bagian opsi salah.\n"
         "- Nilai `correct_summary` hanya berisi penjelasan singkat (tanpa kembali menuliskan frasa 'Jawaban yang tepat'). Jika tidak ada penjelasan tambahan, kosongkan string tersebut.\n"
