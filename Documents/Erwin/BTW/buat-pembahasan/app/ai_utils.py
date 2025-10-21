@@ -108,11 +108,30 @@ def _normalize_reason_capital(text: str, preserve_tokens: set[str]) -> str:
     """Ensure sentences after colon start lowercase unless preserved."""
 
     original = text
-    cleaned = text.lstrip()
-    if not cleaned:
+    if not text:
         return original
 
-    offset = len(text) - len(cleaned)
+    leading_spaces = len(text) - len(text.lstrip())
+    working = text[leading_spaces:]
+
+    prefix, sep, suffix = working.partition(":")
+    if sep and suffix:
+        rest = suffix.lstrip()
+        if rest.lower().startswith("adalah "):
+            rest = rest[len("adalah ") :]
+        if rest:
+            match = re.match(r"[A-Za-zÀ-ÿ']+", rest)
+            if match:
+                word = match.group(0)
+                if word not in preserve_tokens and word.lower() != "anda":
+                    rest = word.lower() + rest[len(word) :]
+        space_after = suffix[: len(suffix) - len(suffix.lstrip())] or " "
+        if not rest:
+            return original
+        new_working = prefix + sep + space_after + rest
+        return text[:leading_spaces] + new_working
+
+    cleaned = working
     idx = 0
     while idx < len(cleaned) and not cleaned[idx].isalpha():
         idx += 1
@@ -128,7 +147,7 @@ def _normalize_reason_capital(text: str, preserve_tokens: set[str]) -> str:
         return original
 
     lowered = word[0].lower() + word[1:]
-    return original[: offset + idx] + lowered + cleaned[idx + len(word) :]
+    return text[: leading_spaces + idx] + lowered + cleaned[idx + len(word) :]
 
 
 def _enrich_reason(
@@ -300,7 +319,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Paragraf kedua (dan tambahan bila perlu) menjelaskan alasan jawaban benar secara detail (minimal 2 kalimat).\n"
         "- Gunakan paragraf ketiga dengan teks 'Jawaban yang kurang tepat:' (bold).\n"
         "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '<strong>...:</strong> penjelasan...'. Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. Setiap alasan minimal dua kalimat yang jelas.\n"
-        "- Setelah titik dua pada opsi salah, lanjutkan kalimat dengan huruf kecil kecuali untuk nama diri atau kata 'Anda'.\n"
+        "- Setelah titik dua pada opsi salah, lanjutkan kalimat dengan huruf kecil kecuali untuk nama diri atau kata 'Anda'. Hindari mengawali dengan kata 'adalah'.\n"
         "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menulis ulang opsi yang benar di bagian opsi salah.\n"
         "- Nilai `correct_summary` hanya berisi penjelasan singkat (tanpa kembali menuliskan frasa 'Jawaban yang tepat'). Jika tidak ada penjelasan tambahan, kosongkan string tersebut.\n"
