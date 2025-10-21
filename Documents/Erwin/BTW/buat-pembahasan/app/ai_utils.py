@@ -490,6 +490,8 @@ def generate_ai_explanations(
                     reason = _strip_reason_prefix(reason)
                     reason = _strip_option_echo(reason, option_text)
                     reason = _enrich_reason(option_text, reason, main_option, question_summary)
+                    if reason:
+                        reason = _capitalize_sentence(reason)
                     html_parts.append(
                         f"<p style=\"text-align:justify\"><strong>{option_text}:</strong> {reason}</p>"
                     )
