@@ -1,7 +1,10 @@
 """Streamlit app to generate explanations directly on Google Sheets."""
 
+import json
 import os
 import re
+import tempfile
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -16,7 +19,7 @@ from app.config import DEFAULT_MODEL
 # --- Constants ---
 DEFAULT_ENV_PATH = ".env"
 GOOGLE_CREDS_ENV = "GOOGLE_SERVICE_ACCOUNT_FILE"
-DEFAULT_CREDS_FILE = "credentials.json"
+SERVICE_ACCOUNT_SECRET_KEY = "gcp_service_account"
 EXPLANATION_COLUMN = "explanation_ai"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -142,9 +145,54 @@ def ensure_session_defaults() -> None:
         "explanation_cols": {},
         "last_update_summary": [],
         "pending_save": False,
+        "_creds_tmpdir": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+
+
+def _materialize_secret_credentials() -> Optional[str]:
+    try:
+        secret_payload = st.secrets[SERVICE_ACCOUNT_SECRET_KEY]
+    except Exception:
+        secret_payload = None
+
+    if not secret_payload:
+        return None
+
+    if isinstance(secret_payload, str):
+        content = secret_payload.strip()
+        if not content:
+            return None
+    else:
+        content = json.dumps(secret_payload)
+
+    tmp_dir = st.session_state.get("_creds_tmpdir")
+    if not tmp_dir:
+        tmp_dir = tempfile.mkdtemp(prefix="gcp-creds-")
+        st.session_state["_creds_tmpdir"] = tmp_dir
+
+    path = Path(tmp_dir) / "service_account.json"
+    path.write_text(content)
+    return str(path)
+
+
+def resolve_default_credentials() -> Optional[str]:
+    existing = st.session_state.get("client_creds")
+    if existing and os.path.exists(existing):
+        return existing
+
+    secret_path = _materialize_secret_credentials()
+    if secret_path and os.path.exists(secret_path):
+        st.session_state["client_creds"] = secret_path
+        return secret_path
+
+    env_path = os.getenv(GOOGLE_CREDS_ENV)
+    if env_path and os.path.exists(env_path):
+        st.session_state["client_creds"] = env_path
+        return env_path
+
+    return None
 
 
 def stage_init(default_creds: Optional[str]) -> None:
@@ -166,13 +214,17 @@ def stage_init(default_creds: Optional[str]) -> None:
                 help="File JSON service account dengan akses edit ke spreadsheet.",
             )
             if uploaded_file is not None:
-                temp_path = os.path.join("./", uploaded_file.name)
-                with open(temp_path, "wb") as f:
-                    f.write(uploaded_file.getvalue())
-                st.session_state["client_creds"] = temp_path
+                tmp_dir = st.session_state.get("_creds_tmpdir")
+                if not tmp_dir:
+                    tmp_dir = tempfile.mkdtemp(prefix="gcp-creds-")
+                    st.session_state["_creds_tmpdir"] = tmp_dir
+                temp_path = Path(tmp_dir) / uploaded_file.name
+                temp_path.write_bytes(uploaded_file.getvalue())
+                st.session_state["client_creds"] = str(temp_path)
             else:
                 st.warning(
-                    "Unggah file JSON service account atau set variabel lingkungan `GOOGLE_SERVICE_ACCOUNT_FILE`."
+                    "Unggah file JSON service account, set variabel lingkungan "
+                    f"`{GOOGLE_CREDS_ENV}`, atau simpan kredensial di `st.secrets['{SERVICE_ACCOUNT_SECRET_KEY}']`."
                 )
 
     creds_final = st.session_state.get("client_creds")
@@ -423,7 +475,7 @@ def main() -> None:
     init_page()
     ensure_session_defaults()
 
-    default_creds = os.getenv(GOOGLE_CREDS_ENV, DEFAULT_CREDS_FILE)
+    default_creds = resolve_default_credentials()
     stage = st.session_state.get("stage", "init")
 
     if stage == "init":

@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 DEFAULT_MODEL = "gemini-2.0-flash"
 # Ganti nilai berikut dengan API key Gemini Anda bila tidak memakai environment variable.
 # Contoh: GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AIz..."
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AIzaSyAYKb6KABk2C-MOXtgnNuKR83pCuh2DbB0"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "ISI_API_KEY"
 
 REQUIRED_COLUMNS: List[str] = [
     "no",

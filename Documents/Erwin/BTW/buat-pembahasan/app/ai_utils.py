@@ -308,10 +308,16 @@ def generate_ai_explanations(
         )
         return []
 
-    effective_key = api_key or GEMINI_API_KEY
+    effective_key = (api_key or GEMINI_API_KEY or "").strip()
+    if not effective_key or "ISI_API_KEY" in effective_key:
+        secret_key = st.secrets.get("gemini_api_key")
+        if secret_key:
+            effective_key = str(secret_key).strip()
+
     if not effective_key or "ISI_API_KEY" in effective_key:
         st.error(
-            "API key Gemini belum dikonfigurasi. Set variabel lingkungan `GEMINI_API_KEY` atau perbarui `GEMINI_API_KEY` di `app/config.py`."
+            "API key Gemini belum dikonfigurasi. Set environment variable `GEMINI_API_KEY` "
+            "atau simpan di `st.secrets['gemini_api_key']`."
         )
         return []
 
