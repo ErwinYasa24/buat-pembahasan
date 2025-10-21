@@ -432,17 +432,13 @@ def generate_ai_explanations(
                         f"<p style=\"text-align:justify\"><strong>Jawaban yang tepat: {primary_text}</strong></p>"
                     )
 
-                if explanation_core:
+                if explanation_core and not detail_paragraphs:
                     explanation_sentence = explanation_core.strip()
                     if explanation_sentence:
                         explanation_sentence = explanation_sentence[0].upper() + explanation_sentence[1:]
                         if explanation_sentence[-1] not in ".!?":
                             explanation_sentence += "."
-                        if detail_paragraphs:
-                            detail_paragraphs = list(detail_paragraphs)
-                            detail_paragraphs[0] = f"{explanation_sentence} {str(detail_paragraphs[0]).lstrip()}"
-                        else:
-                            detail_paragraphs = [explanation_sentence]
+                        detail_paragraphs = [explanation_sentence]
 
             explanation_paragraphs_added = 0
             for paragraph in detail_paragraphs:
