@@ -91,6 +91,46 @@ def _capitalize_sentence(text: str) -> str:
     return cleaned
 
 
+def _extract_proper_tokens(*texts: str) -> set[str]:
+    """Collect capitalized tokens to preserve capitalization (names, etc.)."""
+
+    tokens: set[str] = set()
+    for text in texts:
+        if not text:
+            continue
+        for token in re.findall(r"[A-Za-zÀ-ÿ']+", text):
+            if token and token[0].isupper():
+                tokens.add(token)
+    return tokens
+
+
+def _normalize_reason_capital(text: str, preserve_tokens: set[str]) -> str:
+    """Ensure sentences after colon start lowercase unless preserved."""
+
+    original = text
+    cleaned = text.lstrip()
+    if not cleaned:
+        return original
+
+    offset = len(text) - len(cleaned)
+    idx = 0
+    while idx < len(cleaned) and not cleaned[idx].isalpha():
+        idx += 1
+    if idx >= len(cleaned):
+        return original
+
+    match = re.match(r"[A-Za-zÀ-ÿ']+", cleaned[idx:])
+    if not match:
+        return original
+
+    word = match.group(0)
+    if word in preserve_tokens or word.lower() == "anda":
+        return original
+
+    lowered = word[0].lower() + word[1:]
+    return original[: offset + idx] + lowered + cleaned[idx + len(word) :]
+
+
 def _enrich_reason(
     option_text: str,
     reason: str,
@@ -512,7 +552,8 @@ def generate_ai_explanations(
                     reason = _strip_option_echo(reason, option_text)
                     reason = _enrich_reason(option_text, reason, main_option, question_summary)
                     if reason:
-                        reason = _capitalize_sentence(reason)
+                        preserve_tokens = _extract_proper_tokens(option_text, main_option)
+                        reason = _normalize_reason_capital(reason, preserve_tokens)
                     html_parts.append(
                         f"<p style=\"text-align:justify\"><strong>{option_text}:</strong> {reason}</p>"
                     )
