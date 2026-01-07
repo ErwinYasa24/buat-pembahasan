@@ -153,6 +153,7 @@ def _wrap_math_tex(text: str) -> str:
 
     if not text:
         return text
+    text = text.replace("\times", "\\times")
     wrapped = re.sub(
         r"(\\\(.+?\\\))",
         r'<span class="math-tex">\1</span>',
