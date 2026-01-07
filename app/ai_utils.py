@@ -454,6 +454,8 @@ def _enrich_reason(
     reason: str,
     correct_text: str,
     question_summary: str,
+    *,
+    tkp_mode: bool = False,
 ) -> str:
     """Ensure alasan opsi salah cukup detail (minimal dua kalimat)."""
 
@@ -466,7 +468,15 @@ def _enrich_reason(
 
     supplements: List[str] = []
     if sentence_count < 2 or word_count < 25:
-        if option_text and correct_text:
+        if tkp_mode:
+            supplements.append(
+                "penjelasan ini perlu menegaskan bahwa pilihan tersebut kurang menunjukkan inisiatif, empati, "
+                "atau solusi yang konkret."
+            )
+            supplements.append(
+                "hal ini berpotensi membuat masalah inti tidak terselesaikan dan mengurangi efektivitas kerja tim."
+            )
+        elif option_text and correct_text:
             supplements.append(
                 f"penjelasan ini masih menyoroti {option_text} tanpa mengaitkannya dengan inti soal mengenai {correct_text}."
             )
@@ -758,13 +768,15 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
     if is_tkp:
         instructions += (
             "\n- Khusus TKP, identifikasi topik konteks (Jejaring Kerja, Pelayanan Publik, Sosial Budaya, "
-            "TIK, atau Profesionalisme) dan sebutkan secara singkat di awal penjelasan jawaban benar.\n"
+            "TIK, atau Profesionalisme) tetapi jelaskan secara implisit tanpa menulis label seperti "
+            "'Konteksnya...'.\n"
             "- Jelaskan jawaban poin 5 dengan menonjolkan kata kunci positif (misal: mencari solusi, "
             "inisiatif, empati, tegas).\n"
             "- Analisis gradasi nilai: jelaskan mengapa poin 5 paling sempurna, poin 4 sedikit kurang, "
             "dan poin 1-3 tidak tepat (pasif, menyerahkan masalah, atau emosional).\n"
             "- Jangan menulis ulang teks opsi jawaban secara penuh di paragraf penjelasan; cukup jelaskan intinya.\n"
-            "- Jangan mengulang teks soal di paragraf penjelasan."
+            "- Jangan mengulang teks soal di paragraf penjelasan.\n"
+            "- Jangan menulis kata 'skor' atau 'poin' di paragraf penjelasan karena bobot sudah ada di judul opsi."
         )
 
     option_instructions = "\n".join(option_instruction_rows)
@@ -1147,7 +1159,13 @@ def generate_ai_explanations(
                     reason = _sanitize_text(reason)
                     reason = _strip_reason_prefix(reason)
                     reason = _strip_option_echo(reason, option_text)
-                    reason = _enrich_reason(option_text, reason, main_option, question_summary)
+                    reason = _enrich_reason(
+                        option_text,
+                        reason,
+                        main_option,
+                        question_summary,
+                        tkp_mode=is_tkp,
+                    )
                     if reason:
                         preserve_tokens = _extract_proper_tokens(option_text, main_option)
                         reason = _normalize_reason_capital(reason, preserve_tokens)
