@@ -12,6 +12,7 @@ from .config import GEMINI_API_KEY, OPTION_COLUMNS
 
 OPTION_TEXT_LABELS = [label for label in OPTION_COLUMNS.keys() if label != "Pilihan"]
 MIN_NUMERIC_PARAGRAPHS = 4
+MIN_TKP_PARAGRAPHS = 1
 TABLE_STYLE = "border-collapse:collapse; table-layout:auto; width:50%"
 TABLE_CELL_STYLE = "text-align:center; white-space:nowrap"
 
@@ -24,6 +25,16 @@ def _sanitize_text(value: str) -> str:
     text = text.replace("\n", " ").replace("\r", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def _summarize_option_text(option_text: str, max_words: int = 12) -> str:
+    cleaned = _sanitize_text(option_text)
+    if not cleaned:
+        return ""
+    words = cleaned.split()
+    if len(words) <= max_words:
+        return cleaned
+    return " ".join(words[:max_words]) + "..."
 
 
 def _normalize_label(value: object) -> str:
@@ -776,7 +787,9 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "dan poin 1-3 tidak tepat (pasif, menyerahkan masalah, atau emosional).\n"
             "- Jangan menulis ulang teks opsi jawaban secara penuh di paragraf penjelasan; cukup jelaskan intinya.\n"
             "- Jangan mengulang teks soal di paragraf penjelasan.\n"
-            "- Jangan menulis kata 'skor' atau 'poin' di paragraf penjelasan karena bobot sudah ada di judul opsi."
+            "- Jangan menulis kata 'skor' atau 'poin' di paragraf penjelasan karena bobot sudah ada di judul opsi.\n"
+            "- Hindari kalimat generik seperti 'Pilihan ini paling tepat karena menunjukkan inisiatif, empati, "
+            "dan tindakan nyata' tanpa menyebutkan inti tindakan spesifik pada opsi benar."
         )
 
     option_instructions = "\n".join(option_instruction_rows)
@@ -980,6 +993,40 @@ def generate_ai_explanations(
                     if retry_data is not None:
                         data = retry_data
 
+            if is_tkp:
+                candidate_paragraphs = _normalize_detail_paragraphs(
+                    data.get("detail_paragraphs")
+                )
+                filtered = [
+                    p for p in candidate_paragraphs
+                    if not _is_disallowed_detail(_sanitize_text(p))
+                ]
+                if len(filtered) < MIN_TKP_PARAGRAPHS:
+                    retry_prompt = (
+                        prompt
+                        + "\n\nPERBAIKI: Outputkan JSON valid dan minimal 1 paragraf penjelasan jawaban benar "
+                        "yang menjelaskan inti tindakan opsi benar secara spesifik tanpa menyalin teks opsi."
+                    )
+                    try:
+                        retry_response = model.generate_content(
+                            retry_prompt,
+                            generation_config={
+                                "response_mime_type": "application/json",
+                            },
+                        )
+                    except Exception:
+                        retry_response = model.generate_content(retry_prompt)
+                    retry_text = (retry_response.text or "").strip()
+                    retry_text = retry_text.replace("```,", "```")
+                    if retry_text.startswith("```"):
+                        retry_text = retry_text.strip()
+                        if retry_text.startswith("```json"):
+                            retry_text = retry_text[len("```json"):]
+                        retry_text = retry_text.strip("`").strip()
+                    retry_data = _parse_response(retry_text)
+                    if retry_data is not None:
+                        data = retry_data
+
             correct_summary = str(data.get("correct_summary", "")).strip()
             detail_paragraphs = _normalize_detail_paragraphs(
                 data.get("detail_paragraphs")
@@ -1126,11 +1173,20 @@ def generate_ai_explanations(
                 and not is_verbal_analitis
             ):
                 if is_tkp:
-                    default_explanation = (
-                        "Pilihan ini paling tepat karena menunjukkan inisiatif, empati, dan tindakan nyata "
-                        "untuk menyelesaikan masalah secara konstruktif. Jawaban lain kurang tepat karena "
-                        "lebih pasif, terlalu menyerahkan pada pihak lain, atau tidak menyentuh akar masalah."
-                    )
+                    option_hint = _summarize_option_text(main_option)
+                    if option_hint:
+                        default_explanation = (
+                            f"Pilihan ini paling tepat karena menekankan {option_hint.lower()} "
+                            "sebagai langkah konkret untuk menyelesaikan masalah. Pendekatan ini lebih "
+                            "solutif dan terukur dibandingkan opsi lain yang cenderung pasif atau tidak "
+                            "menyentuh akar masalah."
+                        )
+                    else:
+                        default_explanation = (
+                            "Pilihan ini paling tepat karena menekankan langkah konkret dan solutif untuk "
+                            "menyelesaikan masalah. Pendekatan ini lebih terukur dibandingkan opsi lain yang "
+                            "cenderung pasif atau tidak menyentuh akar masalah."
+                        )
                 else:
                     default_explanation = (
                         "Pilihan ini paling tepat karena menjawab inti persoalan secara langsung dan logis. "
