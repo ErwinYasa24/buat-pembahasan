@@ -34,7 +34,7 @@ def _summarize_option_text(option_text: str, max_words: int = 12) -> str:
     words = cleaned.split()
     if len(words) <= max_words:
         return cleaned
-    return " ".join(words[:max_words]) + "..."
+    return " ".join(words[:max_words])
 
 
 def _normalize_label(value: object) -> str:
@@ -481,11 +481,10 @@ def _enrich_reason(
     if sentence_count < 2 or word_count < 25:
         if tkp_mode:
             supplements.append(
-                "penjelasan ini perlu menegaskan bahwa pilihan tersebut kurang menunjukkan inisiatif, empati, "
-                "atau solusi yang konkret."
+                "meskipun tampak membantu, pilihan ini tidak menunjukkan inisiatif atau solusi yang paling tepat."
             )
             supplements.append(
-                "hal ini berpotensi membuat masalah inti tidak terselesaikan dan mengurangi efektivitas kerja tim."
+                "dampaknya, masalah inti berisiko tidak terselesaikan secara tuntas dan efektivitas kerja menurun."
             )
         elif option_text and correct_text:
             supplements.append(
@@ -789,7 +788,11 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "- Jangan mengulang teks soal di paragraf penjelasan.\n"
             "- Jangan menulis kata 'skor' atau 'poin' di paragraf penjelasan karena bobot sudah ada di judul opsi.\n"
             "- Hindari kalimat generik seperti 'Pilihan ini paling tepat karena menunjukkan inisiatif, empati, "
-            "dan tindakan nyata' tanpa menyebutkan inti tindakan spesifik pada opsi benar."
+            "dan tindakan nyata' tanpa menyebutkan inti tindakan spesifik pada opsi benar.\n"
+            "- Gunakan gaya naratif seperti: 'Opsi ini merupakan yang paling tepat karena ...' lalu jelaskan "
+            "tindakan spesifik, dampak positif, serta alasan efektivitas/efisiensinya.\n"
+            "- Untuk opsi kurang tepat, gunakan pola 'meskipun ... namun ...' dan jelaskan risiko/kelemahan "
+            "dibanding opsi terbaik."
         )
 
     option_instructions = "\n".join(option_instruction_rows)
@@ -1176,16 +1179,16 @@ def generate_ai_explanations(
                     option_hint = _summarize_option_text(main_option)
                     if option_hint:
                         default_explanation = (
-                            f"Pilihan ini paling tepat karena menekankan {option_hint.lower()} "
-                            "sebagai langkah konkret untuk menyelesaikan masalah. Pendekatan ini lebih "
-                            "solutif dan terukur dibandingkan opsi lain yang cenderung pasif atau tidak "
-                            "menyentuh akar masalah."
+                            "Opsi ini merupakan yang paling tepat karena tindakan seperti "
+                            f"{option_hint.lower()} menunjukkan sikap proaktif dan solutif. "
+                            "Langkah ini membantu menyelesaikan masalah secara efektif tanpa menimbulkan "
+                            "risiko tambahan, sehingga lebih tepat dibandingkan opsi lain yang cenderung pasif."
                         )
                     else:
                         default_explanation = (
-                            "Pilihan ini paling tepat karena menekankan langkah konkret dan solutif untuk "
-                            "menyelesaikan masalah. Pendekatan ini lebih terukur dibandingkan opsi lain yang "
-                            "cenderung pasif atau tidak menyentuh akar masalah."
+                            "Opsi ini merupakan yang paling tepat karena tindakan pada opsi ini bersifat "
+                            "proaktif dan solutif. Langkah ini efektif menyelesaikan masalah tanpa menambah "
+                            "risiko, sehingga lebih tepat dibandingkan opsi lain yang cenderung pasif."
                         )
                 else:
                     default_explanation = (
