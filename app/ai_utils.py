@@ -710,7 +710,7 @@ def generate_ai_explanations(
             skip_reason = _should_skip_row(row.get("category"), row.get("sub_category"))
             if skip_reason:
                 question_label = row.get("no") or row_idx
-                st.info(f"Lewati baris {question_label}: {skip_reason}")
+                st.info(f"Lewati nomor {question_label}: {skip_reason}")
                 continue
 
             prompt_data = build_prompt(row)
@@ -733,7 +733,7 @@ def generate_ai_explanations(
             if not correct_indices:
                 question_label = row.get("no") or row_idx
                 st.warning(
-                    f"Lewati baris {question_label}: tidak menemukan jawaban benar pada data sumber."
+                    f"Lewati nomor {question_label}: tidak menemukan jawaban benar pada data sumber."
                 )
                 continue
 
@@ -781,7 +781,7 @@ def generate_ai_explanations(
                 if parsed is None:
                     question_label = row.get("no") or row_idx
                     st.warning(
-                        f"Format respons tidak valid untuk baris {question_label}. Mengabaikan pembaruan."
+                        f"Format respons tidak valid untuk nomor {question_label}. Mengabaikan pembaruan."
                     )
                     continue
 
@@ -933,7 +933,7 @@ def generate_ai_explanations(
             updated_rows.append(row_idx)
         except Exception as exc:  # pragma: no cover - ditampilkan ke pengguna
             question_label = row.get("no") or row_idx
-            st.warning(f"Gagal membuat pembahasan untuk baris {question_label}: {exc}")
+            st.warning(f"Gagal membuat pembahasan untuk nomor {question_label}: {exc}")
         finally:
             progress.progress(counter / len(target_indices))
             status_text.info(f"Memproses {counter}/{len(target_indices)}")
