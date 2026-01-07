@@ -172,6 +172,40 @@ def _format_paragraph(text: str, styled: bool) -> str:
     return f"<p>{text}</p>"
 
 
+def _extract_math_segments(raw_text: str) -> List[str]:
+    text = raw_text
+    text = re.sub(r"<br\s*/?>", "\\\\\n", text, flags=re.IGNORECASE)
+    text = text.replace("&nbsp;", " ")
+
+    segments: List[str] = []
+
+    for span in re.findall(
+        r"<span[^>]*class=[\"']math-tex[\"'][^>]*>(.*?)</span>",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    ):
+        segments.append(span)
+
+    for pattern in (
+        r"\\\((.+?)\\\)",
+        r"\\\[(.+?)\\\]",
+        r"\$\$(.+?)\$\$",
+        r"\$(.+?)\$",
+    ):
+        for match in re.findall(pattern, text, flags=re.DOTALL):
+            segments.append(match)
+
+    cleaned_segments: List[str] = []
+    for segment in segments:
+        cleaned = re.sub(r"<[^>]+>", " ", segment)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = _strip_math_wrappers(cleaned)
+        if cleaned:
+            cleaned_segments.append(cleaned)
+
+    return cleaned_segments
+
+
 def _is_escaped(text: str, idx: int) -> bool:
     backslashes = 0
     cursor = idx - 1
@@ -714,7 +748,7 @@ def generate_ai_explanations(
                                 parsed = None
             if parsed is None:
                 if is_tiu_numerik:
-                    math_segments = re.findall(r"\\\((.+?)\\\)", raw_text, flags=re.DOTALL)
+                    math_segments = _extract_math_segments(raw_text)
                     if math_segments:
                         parsed = {
                             "correct_summary": math_segments[0],
