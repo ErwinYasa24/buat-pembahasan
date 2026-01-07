@@ -147,14 +147,20 @@ def _wrap_math_tex(text: str) -> str:
 
 def _strip_math_wrappers(text: str) -> str:
     cleaned = text.strip()
-    if cleaned.startswith("\\(") and cleaned.endswith("\\)"):
-        return cleaned[2:-2].strip()
-    if cleaned.startswith("\\[") and cleaned.endswith("\\]"):
-        return cleaned[2:-2].strip()
-    if cleaned.startswith("$$") and cleaned.endswith("$$") and len(cleaned) > 3:
-        return cleaned[2:-2].strip()
-    if cleaned.startswith("$") and cleaned.endswith("$") and len(cleaned) > 1:
-        return cleaned[1:-1].strip()
+    patterns = [
+        r"^\\\((.*)\\\)\s*\.?$",
+        r"^\\\[(.*)\\\]\s*\.?$",
+        r"^\$\$(.*)\$\$\s*\.?$",
+        r"^\$(.*)\$\s*\.?$",
+    ]
+    updated = True
+    while updated:
+        updated = False
+        for pattern in patterns:
+            match = re.match(pattern, cleaned, flags=re.DOTALL)
+            if match:
+                cleaned = match.group(1).strip()
+                updated = True
     return cleaned
 
 
@@ -166,6 +172,17 @@ def _format_math_span(text: str) -> str:
     math_text = math_text.replace("\n", "\\\\\n")
     math_text = re.sub(r"(?<!\\)\\(?=\s|$)", r"\\\\", math_text)
     return f"<span class=\"math-tex\">\\({math_text}\\)</span>"
+
+
+def _split_math_paragraphs(text: str) -> List[str]:
+    cleaned = _strip_math_wrappers(text)
+    if not cleaned:
+        return []
+    if "\\text{" in cleaned:
+        parts = [part.strip() for part in re.split(r"(?=\\text\{)", cleaned) if part.strip()]
+        if parts:
+            return parts
+    return [cleaned]
 
 
 def _format_paragraph(text: str, styled: bool) -> str:
@@ -753,9 +770,12 @@ def generate_ai_explanations(
                 if is_tiu_numerik:
                     math_segments = _extract_math_segments(raw_text)
                     if math_segments:
+                        expanded: List[str] = []
+                        for segment in math_segments:
+                            expanded.extend(_split_math_paragraphs(segment))
                         parsed = {
-                            "correct_summary": math_segments[0],
-                            "detail_paragraphs": math_segments[1:],
+                            "correct_summary": expanded[0],
+                            "detail_paragraphs": expanded[1:],
                             "incorrect_reasons": {},
                         }
                 if parsed is None:
@@ -850,11 +870,15 @@ def generate_ai_explanations(
                 if not paragraph:
                     continue
                 if is_tiu_numerik:
-                    math_span = _format_math_span(paragraph)
-                    if not math_span:
+                    math_blocks = _split_math_paragraphs(paragraph)
+                    if not math_blocks:
                         continue
-                    html_parts.append(_format_paragraph(math_span, styled=False))
-                    explanation_paragraphs_added += 1
+                    for block in math_blocks:
+                        math_span = _format_math_span(block)
+                        if not math_span:
+                            continue
+                        html_parts.append(_format_paragraph(math_span, styled=False))
+                        explanation_paragraphs_added += 1
                     continue
 
                 lowered = paragraph.lower()
