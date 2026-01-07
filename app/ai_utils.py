@@ -1025,28 +1025,24 @@ def generate_ai_explanations(
                         detail_paragraphs = [explanation_sentence]
 
             explanation_paragraphs_added = 0
-            for paragraph in detail_paragraphs:
-                raw_paragraph = str(paragraph).strip()
-                if not raw_paragraph:
-                    continue
-                if is_verbal_analitis and "<table" in raw_paragraph.lower():
-                    html_parts.append(raw_paragraph)
+            if is_tiu_numerik:
+                math_buffer: List[str] = []
+
+                def flush_math_buffer() -> None:
+                    nonlocal explanation_paragraphs_added
+                    if not math_buffer:
+                        return
+                    combined = r"\\ ".join(math_buffer)
+                    math_paragraph = _wrap_math_tex(f"\\({combined}\\)")
+                    html_parts.append(_format_paragraph(math_paragraph, styled=use_style))
                     explanation_paragraphs_added += 1
-                    continue
-                if is_tiu_numerik:
+                    math_buffer.clear()
+
+                for paragraph in detail_paragraphs:
+                    raw_paragraph = str(paragraph).strip()
+                    if not raw_paragraph:
+                        continue
                     numeric_parts = _split_numeric_paragraphs(raw_paragraph)
-                    math_buffer: List[str] = []
-
-                    def flush_math_buffer() -> None:
-                        nonlocal explanation_paragraphs_added
-                        if not math_buffer:
-                            return
-                        combined = r"\\ ".join(math_buffer)
-                        math_paragraph = _wrap_math_tex(f"\\({combined}\\)")
-                        html_parts.append(_format_paragraph(math_paragraph, styled=use_style))
-                        explanation_paragraphs_added += 1
-                        math_buffer.clear()
-
                     for part in numeric_parts:
                         clean_part = _sanitize_text(part)
                         if _is_disallowed_detail(clean_part):
@@ -1059,26 +1055,34 @@ def generate_ai_explanations(
                         part_wrapped = _wrap_math_tex(part)
                         html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
                         explanation_paragraphs_added += 1
-                    flush_math_buffer()
-                    continue
-                if is_verbal_silogisme:
-                    chunks = re.split(r"(?:\r?\n|<br\s*/?>)+", raw_paragraph, flags=re.IGNORECASE)
-                    for chunk in chunks:
-                        plain_chunk = _sanitize_text(chunk)
-                        if not plain_chunk:
-                            continue
-                        if _is_disallowed_detail(plain_chunk):
-                            continue
-                        html_parts.append(_format_paragraph(plain_chunk, styled=use_style))
+                flush_math_buffer()
+            else:
+                for paragraph in detail_paragraphs:
+                    raw_paragraph = str(paragraph).strip()
+                    if not raw_paragraph:
+                        continue
+                    if is_verbal_analitis and "<table" in raw_paragraph.lower():
+                        html_parts.append(raw_paragraph)
                         explanation_paragraphs_added += 1
-                    continue
-                plain_check = _sanitize_text(raw_paragraph)
-                if not plain_check:
-                    continue
-                if _is_disallowed_detail(plain_check):
-                    continue
-                html_parts.append(_format_paragraph(plain_check, styled=use_style))
-                explanation_paragraphs_added += 1
+                        continue
+                    if is_verbal_silogisme:
+                        chunks = re.split(r"(?:\r?\n|<br\s*/?>)+", raw_paragraph, flags=re.IGNORECASE)
+                        for chunk in chunks:
+                            plain_chunk = _sanitize_text(chunk)
+                            if not plain_chunk:
+                                continue
+                            if _is_disallowed_detail(plain_chunk):
+                                continue
+                            html_parts.append(_format_paragraph(plain_chunk, styled=use_style))
+                            explanation_paragraphs_added += 1
+                        continue
+                    plain_check = _sanitize_text(raw_paragraph)
+                    if not plain_check:
+                        continue
+                    if _is_disallowed_detail(plain_check):
+                        continue
+                    html_parts.append(_format_paragraph(plain_check, styled=use_style))
+                    explanation_paragraphs_added += 1
 
             if (
                 main_option
