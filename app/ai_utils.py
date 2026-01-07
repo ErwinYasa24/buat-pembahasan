@@ -655,7 +655,7 @@ def generate_ai_explanations(
         try:
             skip_reason = _should_skip_row(row.get("category"), row.get("sub_category"))
             if skip_reason:
-                question_label = row.get("id") or row.get("no") or row_idx
+                question_label = row.get("no") or row_idx
                 st.info(f"Lewati baris {question_label}: {skip_reason}")
                 continue
 
@@ -677,7 +677,7 @@ def generate_ai_explanations(
             incorrect_indices = _order_indices(incorrect_indices, option_scores, option_map)
 
             if not correct_indices:
-                question_label = row.get("id") or row.get("no") or row_idx
+                question_label = row.get("no") or row_idx
                 st.warning(
                     f"Lewati baris {question_label}: tidak menemukan jawaban benar pada data sumber."
                 )
@@ -713,10 +713,20 @@ def generate_ai_explanations(
                             except json.JSONDecodeError:
                                 parsed = None
             if parsed is None:
-                st.warning(
-                    f"Format respons tidak valid untuk baris {row_idx}. Mengabaikan pembaruan."
-                )
-                continue
+                if is_tiu_numerik:
+                    math_segments = re.findall(r"\\\((.+?)\\\)", raw_text, flags=re.DOTALL)
+                    if math_segments:
+                        parsed = {
+                            "correct_summary": math_segments[0],
+                            "detail_paragraphs": math_segments[1:],
+                            "incorrect_reasons": {},
+                        }
+                if parsed is None:
+                    question_label = row.get("no") or row_idx
+                    st.warning(
+                        f"Format respons tidak valid untuk baris {question_label}. Mengabaikan pembaruan."
+                    )
+                    continue
 
             data = parsed
 
