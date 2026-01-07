@@ -93,6 +93,48 @@ def _is_tkp(category_value: object) -> bool:
     return _normalize_label(category_value) == "tkp"
 
 
+def _tkp_expected_aspect(sub_category_value: object) -> Optional[str]:
+    sub_norm = _normalize_label(sub_category_value)
+    if "jejaring" in sub_norm:
+        return "jejaring kerja"
+    if "pelayanan" in sub_norm:
+        return "pelayanan publik"
+    if "sosial" in sub_norm or "budaya" in sub_norm:
+        return "sosial budaya"
+    if "tik" in sub_norm or "teknologi" in sub_norm:
+        return "tik"
+    if "radikal" in sub_norm:
+        return "anti radikalisme"
+    if "profesional" in sub_norm:
+        return "profesionalisme"
+    return None
+
+
+def _filter_tkp_aspects(text: str, expected: Optional[str]) -> str:
+    if not text:
+        return text
+    aspect_map = {
+        "jejaring kerja": "kerja sama",
+        "pelayanan publik": "pelayanan publik",
+        "sosial budaya": "sosial budaya",
+        "tik": "pemanfaatan teknologi",
+        "anti radikalisme": "anti radikalisme",
+        "profesionalisme": "profesionalisme",
+    }
+    expected_key = expected or ""
+    cleaned = text
+    for key in aspect_map:
+        if key == expected_key:
+            continue
+        cleaned = re.sub(
+            rf"\b{re.escape(key)}\b",
+            "pendekatan yang relevan",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    return cleaned
+
+
 def _extract_option_scores(row: pd.Series) -> List[Optional[float]]:
     """Return numeric scores for options A-E in order."""
 
@@ -779,6 +821,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         instructions += (
             "\n\n--- INSTRUKSI KHUSUS TKP (WAJIB DIPATUHI) ---"
             "\n1. IDENTIFIKASI TOPIK: Tentukan topik (Jejaring Kerja, Pelayanan Publik, dll) secara implisit."
+            "\n1b. Fokus pada aspek sesuai subkategori TKP yang tercantum di metadata; jangan menyebut aspek lain."
             "\n2. LARANGAN KERAS COPY-PASTE: DILARANG mengulang atau menyalin kembali teks opsi jawaban secara "
             "utuh di dalam penjelasan. JANGAN memulai kalimat dengan 'Opsi [Teks Opsi] merupakan...'."
             "\n3. GUNAKAN KATA RUJUKAN: Mulailah penjelasan Poin 5 dengan kata ganti, contoh: 'Langkah ini...', "
@@ -924,6 +967,7 @@ def generate_ai_explanations(
                 row.get("sub_category"),
             )
             is_tkp = _is_tkp(row.get("category"))
+            tkp_expected_aspect = _tkp_expected_aspect(row.get("sub_category"))
             include_incorrect = not is_tiu_numerik
 
             correct_indices = _order_indices(correct_indices, option_scores, option_map)
@@ -1163,6 +1207,11 @@ def generate_ai_explanations(
                         stripped = _strip_option_echo(plain_check, main_option)
                         if stripped and stripped != plain_check:
                             plain_check = _capitalize_sentence(stripped)
+                    if is_tkp:
+                        plain_check = _filter_tkp_aspects(
+                            plain_check,
+                            tkp_expected_aspect,
+                        )
                     if _is_disallowed_detail(plain_check):
                         continue
                     html_parts.append(_format_paragraph(plain_check, styled=use_style))
@@ -1193,6 +1242,11 @@ def generate_ai_explanations(
                     default_explanation = (
                         "Pilihan ini paling tepat karena menjawab inti persoalan secara langsung dan logis. "
                         "Opsi lain kurang tepat karena tidak memenuhi kriteria utama yang diminta soal."
+                    )
+                if is_tkp:
+                    default_explanation = _filter_tkp_aspects(
+                        default_explanation,
+                        tkp_expected_aspect,
                     )
                 html_parts.append(_format_paragraph(default_explanation, styled=use_style))
 
