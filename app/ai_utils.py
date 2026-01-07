@@ -78,6 +78,10 @@ def _is_verbal_analitis(category_value: object, sub_category_value: object) -> b
     return category_norm == "tiu" and sub_norm == "verbal analitis"
 
 
+def _is_tkp(category_value: object) -> bool:
+    return _normalize_label(category_value) == "tkp"
+
+
 def _extract_option_scores(row: pd.Series) -> List[Optional[float]]:
     """Return numeric scores for options A-E in order."""
 
@@ -601,6 +605,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
     is_verbal_silogisme = _is_verbal_silogisme(row.get("category"), row.get("sub_category"))
     is_verbal_analogi = _is_verbal_analogi(row.get("category"), row.get("sub_category"))
     is_verbal_analitis = _is_verbal_analitis(row.get("category"), row.get("sub_category"))
+    is_tkp = _is_tkp(row.get("category"))
 
     if omit_incorrect:
         format_template = (
@@ -750,6 +755,18 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
     if not omit_incorrect:
         instructions += incorrect_instructions
 
+    if is_tkp:
+        instructions += (
+            "\n- Khusus TKP, identifikasi topik konteks (Jejaring Kerja, Pelayanan Publik, Sosial Budaya, "
+            "TIK, atau Profesionalisme) dan sebutkan secara singkat di awal penjelasan jawaban benar.\n"
+            "- Jelaskan jawaban poin 5 dengan menonjolkan kata kunci positif (misal: mencari solusi, "
+            "inisiatif, empati, tegas).\n"
+            "- Analisis gradasi nilai: jelaskan mengapa poin 5 paling sempurna, poin 4 sedikit kurang, "
+            "dan poin 1-3 tidak tepat (pasif, menyerahkan masalah, atau emosional).\n"
+            "- Jangan menulis ulang teks opsi jawaban secara penuh di paragraf penjelasan; cukup jelaskan intinya.\n"
+            "- Jangan mengulang teks soal di paragraf penjelasan."
+        )
+
     option_instructions = "\n".join(option_instruction_rows)
     if not option_instructions:
         option_instructions = "(Tidak ada pilihan)"
@@ -879,6 +896,7 @@ def generate_ai_explanations(
                 row.get("category"),
                 row.get("sub_category"),
             )
+            is_tkp = _is_tkp(row.get("category"))
             include_incorrect = not is_tiu_numerik
 
             correct_indices = _order_indices(correct_indices, option_scores, option_map)
@@ -1080,6 +1098,10 @@ def generate_ai_explanations(
                     plain_check = _sanitize_text(raw_paragraph)
                     if not plain_check:
                         continue
+                    if is_tkp and main_option:
+                        stripped = _strip_option_echo(plain_check, main_option)
+                        if stripped and stripped != plain_check:
+                            plain_check = _capitalize_sentence(stripped)
                     if _is_disallowed_detail(plain_check):
                         continue
                     html_parts.append(_format_paragraph(plain_check, styled=use_style))
@@ -1091,10 +1113,17 @@ def generate_ai_explanations(
                 and not is_tiu_numerik
                 and not is_verbal_analitis
             ):
-                default_explanation = (
-                    f"{main_option} mencerminkan penghormatan terhadap seni dan budaya lokal. "
-                    "Jelaskan bagaimana unsur-unsur budaya dalam opsi tersebut muncul pada konteks soal."
-                )
+                if is_tkp:
+                    default_explanation = (
+                        "Pilihan ini paling tepat karena menunjukkan inisiatif, empati, dan tindakan nyata "
+                        "untuk menyelesaikan masalah secara konstruktif. Jawaban lain kurang tepat karena "
+                        "lebih pasif, terlalu menyerahkan pada pihak lain, atau tidak menyentuh akar masalah."
+                    )
+                else:
+                    default_explanation = (
+                        "Pilihan ini paling tepat karena menjawab inti persoalan secara langsung dan logis. "
+                        "Opsi lain kurang tepat karena tidak memenuhi kriteria utama yang diminta soal."
+                    )
                 html_parts.append(_format_paragraph(default_explanation, styled=use_style))
 
             if is_verbal_analitis:
