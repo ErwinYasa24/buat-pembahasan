@@ -162,6 +162,8 @@ def _format_math_span(text: str) -> str:
     math_text = _strip_math_wrappers(text)
     if not math_text:
         return ""
+    math_text = math_text.replace("\r\n", "\n").replace("\r", "\n")
+    math_text = math_text.replace("\n", "\\\\\n")
     math_text = re.sub(r"(?<!\\)\\(?=\s|$)", r"\\\\", math_text)
     return f"<span class=\"math-tex\">\\({math_text}\\)</span>"
 
@@ -578,6 +580,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "Isi `incorrect_reasons` dengan objek kosong {} dan jangan memberikan alasan opsi salah.\n"
             "- Isi `correct_summary` dan setiap elemen `detail_paragraphs` dengan ekspresi MathTeX saja "
             "tanpa kalimat atau kata-kata. Gunakan `\\\\` untuk baris baru di dalam satu ekspresi.\n"
+            "- Setiap elemen `detail_paragraphs` menjadi paragraf MathTeX terpisah.\n"
             "- Gunakan tag <p> tanpa atribut style."
         )
     else:
@@ -842,16 +845,16 @@ def generate_ai_explanations(
                         detail_paragraphs = [explanation_sentence]
 
             explanation_paragraphs_added = 0
-            math_lines: List[str] = []
             for paragraph in detail_paragraphs:
                 paragraph = _sanitize_text(paragraph)
                 if not paragraph:
                     continue
                 if is_tiu_numerik:
-                    math_line = _strip_math_wrappers(paragraph)
-                    if not math_line:
+                    math_span = _format_math_span(paragraph)
+                    if not math_span:
                         continue
-                    math_lines.append(math_line)
+                    html_parts.append(_format_paragraph(math_span, styled=False))
+                    explanation_paragraphs_added += 1
                     continue
 
                 lowered = paragraph.lower()
@@ -866,13 +869,6 @@ def generate_ai_explanations(
                     continue
                 html_parts.append(_format_paragraph(paragraph, styled=use_style))
                 explanation_paragraphs_added += 1
-
-            if is_tiu_numerik and math_lines:
-                combined_lines = "\\\n".join(math_lines)
-                math_span = _format_math_span(combined_lines)
-                if math_span:
-                    html_parts.append(_format_paragraph(math_span, styled=False))
-                    explanation_paragraphs_added += 1
 
             if main_option and explanation_paragraphs_added == 0 and not is_tiu_numerik:
                 default_explanation = (
