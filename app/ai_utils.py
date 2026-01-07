@@ -40,14 +40,10 @@ def _should_skip_row(category_value: object, sub_category_value: object) -> Opti
         return None
 
     sub_norm = _normalize_label(sub_category_value)
-    if not sub_norm:
-        return "subkategori TIU tidak tercantum."
     if sub_norm.startswith("figural"):
         return "subkategori TIU figural di-skip."
     if sub_norm.startswith("numerik deret"):
         return "subkategori TIU numerik deret di-skip."
-    if sub_norm not in {"verbal", "numerik"}:
-        return "subkategori TIU di luar Verbal/Numerik."
     return None
 
 
@@ -58,7 +54,7 @@ def _is_tiu_numerik(category_value: object, sub_category_value: object) -> bool:
     if category_norm != "tiu":
         return False
     sub_norm = _normalize_label(sub_category_value)
-    return sub_norm == "numerik"
+    return sub_norm.startswith("numerik") and not sub_norm.startswith("numerik deret")
 
 
 def _extract_option_scores(row: pd.Series) -> List[Optional[float]]:
