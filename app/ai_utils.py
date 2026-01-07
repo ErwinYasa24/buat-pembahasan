@@ -162,6 +162,7 @@ def _format_math_span(text: str) -> str:
     math_text = _strip_math_wrappers(text)
     if not math_text:
         return ""
+    math_text = re.sub(r"(?<!\\)\\(?=\s|$)", r"\\\\", math_text)
     return f"<span class=\"math-tex\">\\({math_text}\\)</span>"
 
 
@@ -169,6 +170,54 @@ def _format_paragraph(text: str, styled: bool) -> str:
     if styled:
         return f"<p style=\"text-align:justify\">{text}</p>"
     return f"<p>{text}</p>"
+
+
+def _is_escaped(text: str, idx: int) -> bool:
+    backslashes = 0
+    cursor = idx - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def _repair_json_text(raw_text: str) -> str:
+    """Escape invalid JSON backslashes and newlines within strings."""
+
+    result: List[str] = []
+    in_string = False
+    idx = 0
+    length = len(raw_text)
+    while idx < length:
+        char = raw_text[idx]
+        if char == "\"" and not _is_escaped(raw_text, idx):
+            in_string = not in_string
+            result.append(char)
+            idx += 1
+            continue
+        if in_string:
+            if char == "\n":
+                result.append("\\n")
+                idx += 1
+                continue
+            if char == "\r":
+                result.append("\\r")
+                idx += 1
+                continue
+            if char == "\\":
+                if idx + 1 < length:
+                    nxt = raw_text[idx + 1]
+                    if nxt in "\"\\/bfnrtu":
+                        result.append(char)
+                        result.append(nxt)
+                        idx += 2
+                        continue
+                result.append("\\\\")
+                idx += 1
+                continue
+        result.append(char)
+        idx += 1
+    return "".join(result)
 
 
 _REASON_PREFIXES = [
@@ -647,14 +696,22 @@ def generate_ai_explanations(
             try:
                 parsed = json.loads(raw_text)
             except json.JSONDecodeError:
-                start = raw_text.find("{")
-                end = raw_text.rfind("}")
-                if start != -1 and end != -1 and end > start:
-                    candidate = raw_text[start : end + 1]
-                    try:
-                        parsed = json.loads(candidate)
-                    except json.JSONDecodeError:
-                        parsed = None
+                repaired = _repair_json_text(raw_text)
+                try:
+                    parsed = json.loads(repaired)
+                except json.JSONDecodeError:
+                    start = raw_text.find("{")
+                    end = raw_text.rfind("}")
+                    if start != -1 and end != -1 and end > start:
+                        candidate = raw_text[start : end + 1]
+                        try:
+                            parsed = json.loads(candidate)
+                        except json.JSONDecodeError:
+                            repaired_candidate = _repair_json_text(candidate)
+                            try:
+                                parsed = json.loads(repaired_candidate)
+                            except json.JSONDecodeError:
+                                parsed = None
             if parsed is None:
                 st.warning(
                     f"Format respons tidak valid untuk baris {row_idx}. Mengabaikan pembaruan."
@@ -741,16 +798,16 @@ def generate_ai_explanations(
                         detail_paragraphs = [explanation_sentence]
 
             explanation_paragraphs_added = 0
+            math_lines: List[str] = []
             for paragraph in detail_paragraphs:
                 paragraph = _sanitize_text(paragraph)
                 if not paragraph:
                     continue
                 if is_tiu_numerik:
-                    math_span = _format_math_span(paragraph)
-                    if not math_span:
+                    math_line = _strip_math_wrappers(paragraph)
+                    if not math_line:
                         continue
-                    html_parts.append(_format_paragraph(math_span, styled=False))
-                    explanation_paragraphs_added += 1
+                    math_lines.append(math_line)
                     continue
 
                 lowered = paragraph.lower()
@@ -765,6 +822,13 @@ def generate_ai_explanations(
                     continue
                 html_parts.append(_format_paragraph(paragraph, styled=use_style))
                 explanation_paragraphs_added += 1
+
+            if is_tiu_numerik and math_lines:
+                combined_lines = "\\\n".join(math_lines)
+                math_span = _format_math_span(combined_lines)
+                if math_span:
+                    html_parts.append(_format_paragraph(math_span, styled=False))
+                    explanation_paragraphs_added += 1
 
             if main_option and explanation_paragraphs_added == 0 and not is_tiu_numerik:
                 default_explanation = (
