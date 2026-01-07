@@ -777,22 +777,21 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
 
     if is_tkp:
         instructions += (
-            "\n- Khusus TKP, identifikasi topik konteks (Jejaring Kerja, Pelayanan Publik, Sosial Budaya, "
-            "TIK, atau Profesionalisme) tetapi jelaskan secara implisit tanpa menulis label seperti "
-            "'Konteksnya...'.\n"
-            "- Jelaskan jawaban poin 5 dengan menonjolkan kata kunci positif (misal: mencari solusi, "
-            "inisiatif, empati, tegas).\n"
-            "- Analisis gradasi nilai: jelaskan mengapa poin 5 paling sempurna, poin 4 sedikit kurang, "
-            "dan poin 1-3 tidak tepat (pasif, menyerahkan masalah, atau emosional).\n"
-            "- Jangan menulis ulang teks opsi jawaban secara penuh di paragraf penjelasan; cukup jelaskan intinya.\n"
-            "- Jangan mengulang teks soal di paragraf penjelasan.\n"
-            "- Jangan menulis kata 'skor' atau 'poin' di paragraf penjelasan karena bobot sudah ada di judul opsi.\n"
-            "- Hindari kalimat generik seperti 'Pilihan ini paling tepat karena menunjukkan inisiatif, empati, "
-            "dan tindakan nyata' tanpa menyebutkan inti tindakan spesifik pada opsi benar.\n"
-            "- Gunakan gaya naratif seperti: 'Opsi ini merupakan yang paling tepat karena ...' lalu jelaskan "
-            "tindakan spesifik, dampak positif, serta alasan efektivitas/efisiensinya.\n"
-            "- Untuk opsi kurang tepat, gunakan pola 'meskipun ... namun ...' dan jelaskan risiko/kelemahan "
-            "dibanding opsi terbaik."
+            "\n\n--- INSTRUKSI KHUSUS TKP (WAJIB DIPATUHI) ---"
+            "\n1. IDENTIFIKASI TOPIK: Tentukan topik (Jejaring Kerja, Pelayanan Publik, dll) secara implisit."
+            "\n2. LARANGAN KERAS COPY-PASTE: DILARANG mengulang atau menyalin kembali teks opsi jawaban secara "
+            "utuh di dalam penjelasan. JANGAN memulai kalimat dengan 'Opsi [Teks Opsi] merupakan...'."
+            "\n3. GUNAKAN KATA RUJUKAN: Mulailah penjelasan Poin 5 dengan kata ganti, contoh: 'Langkah ini...', "
+            "'Tindakan proaktif tersebut...', 'Keputusan ini...'."
+            "\n4. STRUKTUR PENJELASAN POIN 5: "
+            "   - Jelaskan HUBUNGAN tindakan dengan INDIKATOR (misal: integritas, empati)."
+            "   - Jelaskan DAMPAK positif jangka panjang dari tindakan tersebut."
+            "   - (Opsional) Bandingkan kenapa ini lebih efektif daripada opsi pengecoh."
+            "\n5. GRADASI NILAI:"
+            "   - Poin 5: Solusi paling konstruktif/sempurna."
+            "   - Poin 4: Solusi baik tapi ada sedikit kekurangan (kurang inisiatif/bergantung orang lain)."
+            "   - Poin 1-3: Pasif, reaktif, atau menghindari tanggung jawab."
+            "\n6. GAYA BAHASA: Analitis, profesional, dan fokus pada 'Mindset ASN'."
         )
 
     option_instructions = "\n".join(option_instruction_rows)
