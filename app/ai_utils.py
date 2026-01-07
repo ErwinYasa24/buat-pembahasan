@@ -11,6 +11,7 @@ import streamlit as st
 from .config import GEMINI_API_KEY, OPTION_COLUMNS
 
 OPTION_TEXT_LABELS = [label for label in OPTION_COLUMNS.keys() if label != "Pilihan"]
+MIN_NUMERIC_PARAGRAPHS = 3
 
 
 def _sanitize_text(value: str) -> str:
@@ -170,7 +171,9 @@ def _format_math_span(text: str) -> str:
         return ""
     math_text = math_text.replace("\r\n", "\n").replace("\r", "\n")
     math_text = math_text.replace("\n", "\\\\\n")
+    math_text = re.sub(r"\\\\(?=[A-Za-z])", r"\\", math_text)
     math_text = re.sub(r"(?<!\\)\\(?=\s|$)", r"\\\\", math_text)
+    math_text = re.sub(r"(?:\\\\\s*)+$", "", math_text)
     return f"<span class=\"math-tex\">\\({math_text}\\)</span>"
 
 
@@ -219,12 +222,19 @@ def _extract_math_segments(raw_text: str) -> List[str]:
             segments.append(match)
 
     cleaned_segments: List[str] = []
+    seen: set[str] = set()
     for segment in segments:
         cleaned = re.sub(r"<[^>]+>", " ", segment)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         cleaned = _strip_math_wrappers(cleaned)
-        if cleaned:
-            cleaned_segments.append(cleaned)
+        if not cleaned:
+            continue
+        normalized = re.sub(r"\\\\(?=[A-Za-z])", r"\\", cleaned)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned_segments.append(cleaned)
 
     return cleaned_segments
 
@@ -275,6 +285,69 @@ def _repair_json_text(raw_text: str) -> str:
         result.append(char)
         idx += 1
     return "".join(result)
+
+
+def _dedupe_paragraphs(paragraphs: Sequence[str]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for paragraph in paragraphs:
+        text = str(paragraph).strip()
+        if not text:
+            continue
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(text)
+    return result
+
+
+def _normalize_detail_paragraphs(value: object) -> List[str]:
+    if isinstance(value, str):
+        paragraphs = [value]
+    elif value is None:
+        paragraphs = []
+    else:
+        paragraphs = list(value)
+    return [str(item).strip() for item in paragraphs if str(item).strip()]
+
+
+def _parse_response(raw_text: str, is_tiu_numerik: bool) -> Optional[Dict[str, object]]:
+    parsed: Optional[Dict[str, object]] = None
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        repaired = _repair_json_text(raw_text)
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            start = raw_text.find("{")
+            end = raw_text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                candidate = raw_text[start : end + 1]
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    repaired_candidate = _repair_json_text(candidate)
+                    try:
+                        parsed = json.loads(repaired_candidate)
+                    except json.JSONDecodeError:
+                        parsed = None
+
+    if parsed is None and is_tiu_numerik:
+        math_segments = _extract_math_segments(raw_text)
+        if math_segments:
+            expanded: List[str] = []
+            for segment in math_segments:
+                expanded.extend(_split_math_paragraphs(segment))
+            if expanded:
+                parsed = {
+                    "correct_summary": expanded[0],
+                    "detail_paragraphs": expanded[1:],
+                    "incorrect_reasons": {},
+                }
+
+    return parsed
 
 
 _REASON_PREFIXES = [
@@ -601,7 +674,10 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "Isi `incorrect_reasons` dengan objek kosong {} dan jangan memberikan alasan opsi salah.\n"
             "- Isi `correct_summary` dan setiap elemen `detail_paragraphs` dengan ekspresi MathTeX saja "
             "tanpa kalimat atau kata-kata. Gunakan `\\\\` untuk baris baru di dalam satu ekspresi.\n"
+            "- Buat minimal 3 elemen `detail_paragraphs` berbeda tanpa duplikasi rumus.\n"
             "- Setiap elemen `detail_paragraphs` menjadi paragraf MathTeX terpisah.\n"
+            "- Gunakan `\\text{...:}` bila ingin memulai paragraf baru yang menjelaskan langkah.\n"
+            "- Pastikan JSON valid dengan meng-escape backslash sebagai `\\\\` di dalam string JSON.\n"
             "- Gunakan tag <p> tanpa atribut style."
         )
     else:
@@ -741,7 +817,16 @@ def generate_ai_explanations(
                 )
                 continue
 
-            response = model.generate_content(prompt)
+            try:
+                response = model.generate_content(
+                    prompt,
+                    generation_config={
+                        "response_mime_type": "application/json",
+                        "max_output_tokens": 2048,
+                    },
+                )
+            except Exception:
+                response = model.generate_content(prompt)
             raw_text = (response.text or "").strip()
             raw_text = raw_text.replace("```,", "```")
             if raw_text.startswith("```"):
@@ -750,54 +835,54 @@ def generate_ai_explanations(
                     raw_text = raw_text[len("```json"):]
                 raw_text = raw_text.strip("`").strip()
 
-            parsed = None
-            try:
-                parsed = json.loads(raw_text)
-            except json.JSONDecodeError:
-                repaired = _repair_json_text(raw_text)
-                try:
-                    parsed = json.loads(repaired)
-                except json.JSONDecodeError:
-                    start = raw_text.find("{")
-                    end = raw_text.rfind("}")
-                    if start != -1 and end != -1 and end > start:
-                        candidate = raw_text[start : end + 1]
-                        try:
-                            parsed = json.loads(candidate)
-                        except json.JSONDecodeError:
-                            repaired_candidate = _repair_json_text(candidate)
-                            try:
-                                parsed = json.loads(repaired_candidate)
-                            except json.JSONDecodeError:
-                                parsed = None
-            if parsed is None:
-                if is_tiu_numerik:
-                    math_segments = _extract_math_segments(raw_text)
-                    if math_segments:
-                        expanded: List[str] = []
-                        for segment in math_segments:
-                            expanded.extend(_split_math_paragraphs(segment))
-                        parsed = {
-                            "correct_summary": expanded[0],
-                            "detail_paragraphs": expanded[1:],
-                            "incorrect_reasons": {},
-                        }
-                if parsed is None:
-                    question_label = row.get("no") or row_idx
-                    st.warning(
-                        f"Format respons tidak valid untuk nomor {question_label}. Mengabaikan pembaruan."
-                    )
-                    continue
+            data = _parse_response(raw_text, is_tiu_numerik)
+            if data is None:
+                question_label = row.get("no") or row_idx
+                st.warning(
+                    f"Format respons tidak valid untuk nomor {question_label}. Mengabaikan pembaruan."
+                )
+                continue
 
-            data = parsed
+            if is_tiu_numerik:
+                candidate_paragraphs = _normalize_detail_paragraphs(
+                    data.get("detail_paragraphs")
+                )
+                candidate_paragraphs = _dedupe_paragraphs(candidate_paragraphs)
+                if len(candidate_paragraphs) < MIN_NUMERIC_PARAGRAPHS:
+                    retry_prompt = (
+                        prompt
+                        + "\n\nPERBAIKI: Outputkan JSON valid dan "
+                        f"minimal {MIN_NUMERIC_PARAGRAPHS} detail_paragraphs yang berbeda."
+                    )
+                    try:
+                        retry_response = model.generate_content(
+                            retry_prompt,
+                            generation_config={
+                                "response_mime_type": "application/json",
+                                "max_output_tokens": 2048,
+                            },
+                        )
+                    except Exception:
+                        retry_response = model.generate_content(retry_prompt)
+                    retry_text = (retry_response.text or "").strip()
+                    retry_text = retry_text.replace("```,", "```")
+                    if retry_text.startswith("```"):
+                        retry_text = retry_text.strip()
+                        if retry_text.startswith("```json"):
+                            retry_text = retry_text[len("```json"):]
+                        retry_text = retry_text.strip("`").strip()
+                    retry_data = _parse_response(retry_text, is_tiu_numerik)
+                    if retry_data is not None:
+                        data = retry_data
 
             correct_summary = str(data.get("correct_summary", "")).strip()
-            detail_paragraphs_raw = data.get("detail_paragraphs") or []
-            if isinstance(detail_paragraphs_raw, str):
-                detail_paragraphs = [detail_paragraphs_raw]
-            else:
-                detail_paragraphs = list(detail_paragraphs_raw)
+            detail_paragraphs = _normalize_detail_paragraphs(
+                data.get("detail_paragraphs")
+            )
             incorrect_reasons = data.get("incorrect_reasons") or {}
+
+            if is_tiu_numerik:
+                detail_paragraphs = _dedupe_paragraphs(detail_paragraphs)
 
             html_parts: List[str] = []
 
