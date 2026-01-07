@@ -176,6 +176,17 @@ def _split_numeric_paragraphs(text: str) -> List[str]:
     return [part for part in parts if part]
 
 
+def _extract_math_content(text: str) -> Optional[str]:
+    stripped = text.strip()
+    match = re.fullmatch(r"\\\((.+)\\\)", stripped, flags=re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    match = re.fullmatch(r"\\\[(.+)\\\]", stripped, flags=re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 def _truncate_text(text: str, limit: int = 4000) -> str:
     if len(text) <= limit:
         return text
@@ -682,6 +693,8 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "- Isi `correct_summary` hanya dengan jawaban yang tepat tanpa penjelasan tambahan.\n"
             r"- Gunakan MathTeX inline dengan pembungkus `\( ... \)` untuk rumus di dalam kalimat.\n"
             "- Jangan menuliskan tag `<span class=\"math-tex\">` karena sistem akan membungkus otomatis.\n"
+            "- Jika ada beberapa baris rumus berurutan, tulis masing-masing sebagai paragraf rumus terpisah; "
+            "sistem akan menggabungkannya menjadi satu paragraf rumus multi-baris.\n"
             "- Jika ada rumus umum, tulis kalimat '... dihitung dengan rumus' lalu tampilkan rumus, "
             "lanjutkan dengan paragraf 'Substitusikan nilainya:', 'Hitung selisihnya:', "
             "'Sederhanakan pecahan:', dan tutup dengan paragraf kesimpulan.\n"
@@ -1022,13 +1035,31 @@ def generate_ai_explanations(
                     continue
                 if is_tiu_numerik:
                     numeric_parts = _split_numeric_paragraphs(raw_paragraph)
+                    math_buffer: List[str] = []
+
+                    def flush_math_buffer() -> None:
+                        nonlocal explanation_paragraphs_added
+                        if not math_buffer:
+                            return
+                        combined = r"\\ ".join(math_buffer)
+                        math_paragraph = _wrap_math_tex(f"\\({combined}\\)")
+                        html_parts.append(_format_paragraph(math_paragraph, styled=use_style))
+                        explanation_paragraphs_added += 1
+                        math_buffer.clear()
+
                     for part in numeric_parts:
                         clean_part = _sanitize_text(part)
                         if _is_disallowed_detail(clean_part):
                             continue
+                        math_content = _extract_math_content(part)
+                        if math_content is not None:
+                            math_buffer.append(math_content)
+                            continue
+                        flush_math_buffer()
                         part_wrapped = _wrap_math_tex(part)
                         html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
                         explanation_paragraphs_added += 1
+                    flush_math_buffer()
                     continue
                 if is_verbal_silogisme:
                     chunks = re.split(r"(?:\r?\n|<br\s*/?>)+", raw_paragraph, flags=re.IGNORECASE)
