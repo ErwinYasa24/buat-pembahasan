@@ -932,7 +932,8 @@ def generate_ai_explanations(
             df.at[row_idx, "explanation_ai"] = explanation_text
             updated_rows.append(row_idx)
         except Exception as exc:  # pragma: no cover - ditampilkan ke pengguna
-            st.warning(f"Gagal membuat pembahasan untuk baris {row_idx}: {exc}")
+            question_label = row.get("no") or row_idx
+            st.warning(f"Gagal membuat pembahasan untuk baris {question_label}: {exc}")
         finally:
             progress.progress(counter / len(target_indices))
             status_text.info(f"Memproses {counter}/{len(target_indices)}")
