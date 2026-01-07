@@ -12,6 +12,8 @@ from .config import GEMINI_API_KEY, OPTION_COLUMNS
 
 OPTION_TEXT_LABELS = [label for label in OPTION_COLUMNS.keys() if label != "Pilihan"]
 MIN_NUMERIC_PARAGRAPHS = 3
+TABLE_STYLE = "border-collapse:collapse; table-layout:auto; width:50%"
+TABLE_CELL_STYLE = "text-align:center; white-space:nowrap"
 
 
 def _sanitize_text(value: str) -> str:
@@ -56,6 +58,24 @@ def _is_tiu_numerik(category_value: object, sub_category_value: object) -> bool:
         return False
     sub_norm = _normalize_label(sub_category_value)
     return sub_norm.startswith("numerik") and not sub_norm.startswith("numerik deret")
+
+
+def _is_verbal_silogisme(category_value: object, sub_category_value: object) -> bool:
+    category_norm = _normalize_label(category_value)
+    sub_norm = _normalize_label(sub_category_value)
+    return category_norm == "tiu" and sub_norm == "verbal silogisme"
+
+
+def _is_verbal_analogi(category_value: object, sub_category_value: object) -> bool:
+    category_norm = _normalize_label(category_value)
+    sub_norm = _normalize_label(sub_category_value)
+    return category_norm == "tiu" and sub_norm == "verbal analogi"
+
+
+def _is_verbal_analitis(category_value: object, sub_category_value: object) -> bool:
+    category_norm = _normalize_label(category_value)
+    sub_norm = _normalize_label(sub_category_value)
+    return category_norm == "tiu" and sub_norm == "verbal analitis"
 
 
 def _extract_option_scores(row: pd.Series) -> List[Optional[float]]:
@@ -146,97 +166,10 @@ def _wrap_math_tex(text: str) -> str:
     return wrapped
 
 
-def _strip_math_wrappers(text: str) -> str:
-    cleaned = text.strip()
-    patterns = [
-        r"^\\\((.*)\\\)\s*\.?$",
-        r"^\\\[(.*)\\\]\s*\.?$",
-        r"^\$\$(.*)\$\$\s*\.?$",
-        r"^\$(.*)\$\s*\.?$",
-    ]
-    updated = True
-    while updated:
-        updated = False
-        for pattern in patterns:
-            match = re.match(pattern, cleaned, flags=re.DOTALL)
-            if match:
-                cleaned = match.group(1).strip()
-                updated = True
-    return cleaned
-
-
-def _format_math_span(text: str) -> str:
-    math_text = _strip_math_wrappers(text)
-    if not math_text:
-        return ""
-    math_text = math_text.replace("\r\n", "\n").replace("\r", "\n")
-    math_text = math_text.replace("\n", "\\\\\n")
-    math_text = re.sub(r"\\\\(?=[A-Za-z])", r"\\", math_text)
-    math_text = re.sub(r"(?<!\\)\\(?=\s|$)", r"\\\\", math_text)
-    math_text = re.sub(r"(?:\\\\\s*)+$", "", math_text)
-    return f"<span class=\"math-tex\">\\({math_text}\\)</span>"
-
-
-def _split_math_paragraphs(text: str) -> List[str]:
-    cleaned = _strip_math_wrappers(text)
-    if not cleaned:
-        return []
-    if "\\text{" in cleaned:
-        parts = [
-            part.strip()
-            for part in re.split(r"(?=\\text\{[^}]*:)", cleaned)
-            if part.strip()
-        ]
-        if len(parts) > 1:
-            return parts
-    return [cleaned]
-
-
 def _format_paragraph(text: str, styled: bool) -> str:
     if styled:
         return f"<p style=\"text-align:justify\">{text}</p>"
     return f"<p>{text}</p>"
-
-
-def _extract_math_segments(raw_text: str) -> List[str]:
-    text = raw_text
-    text = re.sub(r"<br\s*/?>", "\\\\\n", text, flags=re.IGNORECASE)
-    text = text.replace("&nbsp;", " ")
-
-    segments: List[str] = []
-
-    for span in re.findall(
-        r"<span[^>]*class=[\"']math-tex[\"'][^>]*>(.*?)</span>",
-        text,
-        flags=re.DOTALL | re.IGNORECASE,
-    ):
-        segments.append(span)
-
-    for pattern in (
-        r"\\\((.+?)\\\)",
-        r"\\\[(.+?)\\\]",
-        r"\$\$(.+?)\$\$",
-        r"\$(.+?)\$",
-    ):
-        for match in re.findall(pattern, text, flags=re.DOTALL):
-            segments.append(match)
-
-    cleaned_segments: List[str] = []
-    seen: set[str] = set()
-    for segment in segments:
-        cleaned = re.sub(r"<[^>]+>", " ", segment)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        cleaned = _strip_math_wrappers(cleaned)
-        if not cleaned:
-            continue
-        normalized = re.sub(r"\\\\(?=[A-Za-z])", r"\\", cleaned)
-        normalized = re.sub(r"\s+", " ", normalized).strip()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        cleaned_segments.append(cleaned)
-
-    return cleaned_segments
 
 
 def _is_escaped(text: str, idx: int) -> bool:
@@ -312,7 +245,7 @@ def _normalize_detail_paragraphs(value: object) -> List[str]:
     return [str(item).strip() for item in paragraphs if str(item).strip()]
 
 
-def _parse_response(raw_text: str, is_tiu_numerik: bool) -> Optional[Dict[str, object]]:
+def _parse_response(raw_text: str) -> Optional[Dict[str, object]]:
     parsed: Optional[Dict[str, object]] = None
     try:
         parsed = json.loads(raw_text)
@@ -333,19 +266,6 @@ def _parse_response(raw_text: str, is_tiu_numerik: bool) -> Optional[Dict[str, o
                         parsed = json.loads(repaired_candidate)
                     except json.JSONDecodeError:
                         parsed = None
-
-    if parsed is None and is_tiu_numerik:
-        math_segments = _extract_math_segments(raw_text)
-        if math_segments:
-            expanded: List[str] = []
-            for segment in math_segments:
-                expanded.extend(_split_math_paragraphs(segment))
-            if expanded:
-                parsed = {
-                    "correct_summary": expanded[0],
-                    "detail_paragraphs": expanded[1:],
-                    "incorrect_reasons": {},
-                }
 
     return parsed
 
@@ -632,25 +552,73 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
     metadata = "\n".join(part for part in metadata_parts if part)
 
     omit_incorrect = _is_tiu_numerik(row.get("category"), row.get("sub_category"))
+    is_verbal_silogisme = _is_verbal_silogisme(row.get("category"), row.get("sub_category"))
+    is_verbal_analogi = _is_verbal_analogi(row.get("category"), row.get("sub_category"))
+    is_verbal_analitis = _is_verbal_analitis(row.get("category"), row.get("sub_category"))
 
     if omit_incorrect:
         format_template = (
-            "<p><strong>Jawaban yang tepat:&nbsp;</strong><span class=\"math-tex\">\\( ... \\)</span></p>\n"
-            "<p><span class=\"math-tex\">\\( ... \\\\ ... \\)</span></p>"
+            "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
+            "<p style=\"text-align:justify\">Langkah 1 ...</p>\n"
+            "<p style=\"text-align:justify\">Langkah 2 ...</p>"
         )
         intro_text = (
-            "Pembahasan harus fokus pada penyajian rumus matematika terkait jawaban benar."
+            "Pembahasan harus jelas dan mudah dimengerti dengan langkah penyelesaian yang runtut."
+        )
+    elif is_verbal_silogisme:
+        format_template = (
+            "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
+            "<p style=\"text-align:justify\">Premis:</p>\n"
+            "<p style=\"text-align:justify\">Simbol logika:</p>\n"
+            "<p style=\"text-align:justify\">Proses penarikan kesimpulan:</p>\n"
+            "<p style=\"text-align:justify\">Kesimpulan akhir:</p>\n"
+            "<p style=\"text-align:justify\"><strong>Jawaban yang kurang tepat:</strong></p>\n"
+            "<p style=\"text-align:justify\">- <strong>Opsi salah 1:</strong> alasan singkat...</p>"
+        )
+        intro_text = (
+            "Pembahasan harus jelas, terstruktur, dan mudah dimengerti dengan penjelasan singkat "
+            "menggunakan konsep silogisme."
+        )
+    elif is_verbal_analogi:
+        format_template = (
+            "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
+            "<p style=\"text-align:justify\"><strong>Alasan:</strong></p>\n"
+            "<p style=\"text-align:justify\"><strong>1. Poin alasan pertama:</strong> penjelasan...</p>\n"
+            "<p style=\"text-align:justify\"><strong>2. Poin alasan kedua:</strong> penjelasan...</p>\n"
+            "<p style=\"text-align:justify\"><strong>3. Poin alasan ketiga:</strong> penjelasan...</p>\n"
+            "<p style=\"text-align:justify\"><strong>Jawaban yang kurang tepat:</strong></p>\n"
+            "<p style=\"text-align:justify\">- <strong>Opsi salah 1:</strong> alasan singkat...</p>"
+        )
+        intro_text = (
+            "Pembahasan harus jelas dan mudah dimengerti. Berikan alasan jawaban benar dalam "
+            "2-3 poin terstruktur."
+        )
+    elif is_verbal_analitis:
+        format_template = (
+            "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
+            "<p style=\"text-align:justify\">Paragraf penjelasan runtut...</p>\n"
+            "<p style=\"text-align:justify\">Paragraf penjelasan lanjutan...</p>\n"
+            "<table border=\"1\" cellpadding=\"0\" cellspacing=\"0\" style=\""
+            + TABLE_STYLE
+            + "\">...</table>\n"
+            "<p style=\"text-align:justify\">Kalimat ringkasan setelah tabel...</p>\n"
+            "<p style=\"text-align:justify\"><strong>Jawaban yang kurang tepat:</strong></p>\n"
+            "<p style=\"text-align:justify\">- <strong>Opsi salah 1:</strong> alasan singkat...</p>"
+        )
+        intro_text = (
+            "Pembahasan harus jelas, runtut, dan mudah dimengerti dengan penjelasan naratif "
+            "tanpa bullet atau numbering."
         )
     else:
         format_template = (
             "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
             "<p style=\"text-align:justify\">Paragraf penjelasan lanjutan...</p>\n"
             "<p style=\"text-align:justify\"><strong>Jawaban yang kurang tepat:</strong></p>\n"
-            "<p style=\"text-align:justify\"><strong>Opsi salah 1:</strong> alasan singkat...</p>\n"
-            "<p style=\"text-align:justify\"><strong>Opsi salah 2:</strong> alasan singkat...</p>"
+            "<p style=\"text-align:justify\">- <strong>Opsi salah 1:</strong> alasan singkat...</p>\n"
+            "<p style=\"text-align:justify\">- <strong>Opsi salah 2:</strong> alasan singkat...</p>"
         )
         intro_text = (
-            "Pembahasan harus bernas dan mudah dipahami siswa. Jelaskan alasan jawaban benar secara menyeluruh "
+            "Pembahasan harus jelas dan mudah dimengerti. Jelaskan alasan jawaban benar secara menyeluruh "
             "(minimal 3 kalimat) dan uraikan mengapa tiap opsi salah tidak memenuhi kriteria."
         )
 
@@ -664,36 +632,65 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Paragraf kedua (dan tambahan bila perlu) menjelaskan alasan jawaban benar secara detail (minimal 2 kalimat).\n"
         "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menambahkan bobot atau skor ke dalam teks opsi maupun alasan.\n"
-        "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML.\n"
+        "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML, kecuali `table_html` jika diminta.\n"
     )
 
     if omit_incorrect:
         instructions += (
-            "\n- Gunakan notasi MathTeX untuk rumus dengan pembungkus `\\( ... \\)`.\n"
-            "- Khusus TIU subkategori Numerik, fokus pada jawaban yang tepat saja. "
+            "\n- Khusus TIU subkategori Numerik, fokus pada jawaban yang tepat saja. "
             "Isi `incorrect_reasons` dengan objek kosong {} dan jangan memberikan alasan opsi salah.\n"
-            "- Isi `correct_summary` dan setiap elemen `detail_paragraphs` dengan ekspresi MathTeX saja "
-            "tanpa kalimat atau kata-kata. Gunakan `\\\\` untuk baris baru di dalam satu ekspresi.\n"
-            "- Buat minimal 3 elemen `detail_paragraphs` berbeda tanpa duplikasi rumus.\n"
-            "- Setiap elemen `detail_paragraphs` menjadi paragraf MathTeX terpisah.\n"
-            "- Gunakan `\\text{...:}` bila ingin memulai paragraf baru yang menjelaskan langkah.\n"
-            "- Pastikan JSON valid dengan meng-escape backslash sebagai `\\\\` di dalam string JSON.\n"
-            "- Gunakan tag <p> tanpa atribut style."
+            "- Jelaskan langkah demi langkah secara naratif. Setiap elemen `detail_paragraphs` berisi satu langkah.\n"
+            "- Isi `correct_summary` hanya dengan jawaban yang tepat tanpa penjelasan tambahan.\n"
+            r"- Gunakan MathTeX inline dengan pembungkus `\( ... \)` untuk rumus di dalam kalimat.\n"
+            "- Buat minimal 3 elemen `detail_paragraphs` berbeda tanpa duplikasi.\n"
+            "- Pastikan JSON valid dengan meng-escape backslash sebagai `\\\\` di dalam string JSON."
         )
-    else:
+    elif is_verbal_silogisme:
         instructions += (
-            "\n- Gunakan paragraf ketiga dengan teks 'Jawaban yang kurang tepat:' (bold).\n"
-            "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '<strong>...:</strong> penjelasan...'. "
-            "Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. "
-            "Setiap alasan minimal dua kalimat yang jelas.\n"
-            "- Setelah titik dua pada opsi salah, lanjutkan kalimat dengan huruf kecil kecuali untuk nama diri atau kata 'Anda'. "
-            "Hindari mengawali dengan kata 'adalah'.\n"
-            "- Jangan menulis ulang opsi yang benar di bagian opsi salah.\n"
-            "- Nilai dalam `incorrect_reasons` adalah penjelasan mendalam (minimal dua kalimat) untuk tiap opsi salah tanpa menyalin ulang teks opsi.\n"
-            "- Nilai `correct_summary` hanya berisi penjelasan singkat (tanpa kembali menuliskan frasa 'Jawaban yang tepat'). "
-            "Jika tidak ada penjelasan tambahan, kosongkan string tersebut.\n"
-            "- Gunakan style 'text-align:justify' pada setiap tag <p> dan <strong> untuk penekanan."
+            "\n- Jelaskan jawaban secara singkat dan terstruktur menggunakan konsep silogisme.\n"
+            "- Identifikasi seluruh premis (premis mayor, minor, tambahan jika ada) dan jelaskan "
+            "masing-masing dalam kalimat sehari-hari.\n"
+            "- Representasikan setiap premis ke dalam simbol logika (P, Q, R, dst) sebagai rumus bantu "
+            "dan jelaskan makna setiap simbol.\n"
+            "- Jelaskan proses penarikan kesimpulan secara bertahap dan naratif, tekankan hubungan logis "
+            "antar premis serta batasan kesimpulan.\n"
+            "- Akhiri dengan kesimpulan akhir yang eksplisit dan mudah dipahami.\n"
+            "- Gunakan bahasa sederhana, logis, edukatif; hindari simbol logika formal tanpa penjelasan konsep.\n"
+            "- Bagi `detail_paragraphs` menjadi 4 paragraf: premis, simbol, proses, kesimpulan."
         )
+    elif is_verbal_analogi:
+        instructions += (
+            "\n- Buat paragraf kedua berisi '<strong>Alasan:</strong>'.\n"
+            "- Sampaikan 2-3 poin alasan sebagai paragraf terpisah dengan format "
+            "`<strong>1. ...:</strong> penjelasan...`, lanjut ke poin 2 dan 3.\n"
+            "- Setiap poin alasan harus menjelaskan hubungan inti analogi secara ringkas dan jelas."
+        )
+    elif is_verbal_analitis:
+        instructions += (
+            "\n- Gunakan paragraf naratif tanpa bullet/numbering; jangan gunakan <ol>, <ul>, "
+            "atau awalan 1/2/3.\n"
+            "- Jelaskan penempatan jadwal atau urutan secara bertahap dalam 3-5 paragraf.\n"
+            "- Jika memungkinkan, sertakan tabel jadwal dalam `table_html` (boleh string kosong jika tidak ada).\n"
+            f"- Gunakan tabel HTML dengan style table ` {TABLE_STYLE} ` dan setiap <td> memakai "
+            f"style `{TABLE_CELL_STYLE}` serta `border=\"1\" cellpadding=\"0\" cellspacing=\"0\"`.\n"
+            "- Isi `detail_paragraphs` tetap berupa teks polos tanpa tag HTML.\n"
+            "- `table_html` hanya berisi markup tabel (tanpa tag <p>)."
+        )
+    incorrect_instructions = (
+        "\n- Tambahkan paragraf khusus dengan teks 'Jawaban yang kurang tepat:' (bold) setelah penjelasan jawaban benar.\n"
+        "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '- <strong>...:</strong> penjelasan...'. "
+        "Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. "
+        "Setiap alasan minimal dua kalimat yang jelas.\n"
+        "- Setelah titik dua pada opsi salah, lanjutkan kalimat dengan huruf kecil kecuali untuk nama diri atau kata 'Anda'. "
+        "Hindari mengawali dengan kata 'adalah'.\n"
+        "- Jangan menulis ulang opsi yang benar di bagian opsi salah.\n"
+        "- Nilai dalam `incorrect_reasons` adalah penjelasan mendalam (minimal dua kalimat) untuk tiap opsi salah tanpa menyalin ulang teks opsi.\n"
+        "- Nilai `correct_summary` hanya berisi penjelasan singkat (tanpa kembali menuliskan frasa 'Jawaban yang tepat'). "
+        "Jika tidak ada penjelasan tambahan, kosongkan string tersebut.\n"
+        "- Gunakan style 'text-align:justify' pada setiap tag <p> dan <strong> untuk penekanan."
+    )
+    if not omit_incorrect:
+        instructions += incorrect_instructions
 
     option_instructions = "\n".join(option_instruction_rows)
     if not option_instructions:
@@ -717,6 +714,24 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         if idx < len(option_map) and option_map[idx]
     ) or "(Tidak diketahui)"
 
+    schema_lines = [
+        "{",
+        "  \"correct_summary\": string,",
+        "  \"detail_paragraphs\": [string, ...],",
+    ]
+    if is_verbal_analitis:
+        schema_lines.append("  \"table_html\": string,")
+    schema_lines.extend(
+        [
+            "  \"incorrect_reasons\": {",
+            "       \"1\": string alasan (untuk opsi indeks 1 jika salah),",
+            "       ...",
+            "   }",
+            "}",
+        ]
+    )
+    schema = "\n".join(schema_lines)
+
     context = (
         instructions
         + "\n\n"
@@ -725,14 +740,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         + f"Opsi benar (copy teksnya secara utuh ketika menyusun ringkasan):\n{correct_option_display}\n"
         + f"Opsi salah yang wajib dijelaskan: {', '.join(str(idx + 1) for idx in incorrect_indices)}\n"
         + "Kembalikan respons dalam format JSON PERSIS seperti berikut tanpa teks tambahan atau blok kode:\n"
-        "{\n"
-        "  \"correct_summary\": string,\n"
-        "  \"detail_paragraphs\": [string, ...],\n"
-        "  \"incorrect_reasons\": {\n"
-        "       \"1\": string alasan (untuk opsi indeks 1 jika salah),\n"
-        "       ...\n"
-        "   }\n"
-        "}\n"
+        f"{schema}\n"
         "Output TIDAK boleh diawali atau diakhiri dengan karakter selain tanda kurung kurawal JSON."
     )
 
@@ -805,6 +813,10 @@ def generate_ai_explanations(
                 row.get("category"),
                 row.get("sub_category"),
             )
+            is_verbal_analitis = _is_verbal_analitis(
+                row.get("category"),
+                row.get("sub_category"),
+            )
             include_incorrect = not is_tiu_numerik
 
             correct_indices = _order_indices(correct_indices, option_scores, option_map)
@@ -835,7 +847,7 @@ def generate_ai_explanations(
                     raw_text = raw_text[len("```json"):]
                 raw_text = raw_text.strip("`").strip()
 
-            data = _parse_response(raw_text, is_tiu_numerik)
+            data = _parse_response(raw_text)
             if data is None:
                 question_label = row.get("no") or row_idx
                 st.warning(
@@ -871,7 +883,7 @@ def generate_ai_explanations(
                         if retry_text.startswith("```json"):
                             retry_text = retry_text[len("```json"):]
                         retry_text = retry_text.strip("`").strip()
-                    retry_data = _parse_response(retry_text, is_tiu_numerik)
+                    retry_data = _parse_response(retry_text)
                     if retry_data is not None:
                         data = retry_data
 
@@ -903,7 +915,7 @@ def generate_ai_explanations(
             primary_text = ""
             explanation = ""
 
-            use_style = not is_tiu_numerik
+            use_style = True
 
             if correct_summary or main_option:
                 correct_text = _sanitize_text(correct_summary)
@@ -933,17 +945,14 @@ def generate_ai_explanations(
 
                 if primary_text:
                     primary_label = _label_with_score(primary_text, main_score, include_scores)
+                    correct_line = f"Jawaban yang tepat: {primary_label}"
+                    if not is_tiu_numerik:
+                        correct_line = _ensure_trailing_period(correct_line)
                     if is_tiu_numerik:
-                        math_span = _format_math_span(primary_label)
-                        first_line = f"<strong>Jawaban yang tepat:&nbsp;</strong>{math_span}"
-                        html_parts.append(_format_paragraph(first_line, styled=False))
-                    else:
-                        correct_line = _ensure_trailing_period(
-                            f"Jawaban yang tepat: {primary_label}"
-                        )
-                        html_parts.append(
-                            _format_paragraph(f"<strong>{correct_line}</strong>", styled=True)
-                        )
+                        correct_line = _wrap_math_tex(correct_line)
+                    html_parts.append(
+                        _format_paragraph(f"<strong>{correct_line}</strong>", styled=use_style)
+                    )
 
                 if explanation_core and not detail_paragraphs:
                     explanation_sentence = explanation_core.strip()
@@ -955,21 +964,16 @@ def generate_ai_explanations(
 
             explanation_paragraphs_added = 0
             for paragraph in detail_paragraphs:
-                paragraph = _sanitize_text(paragraph)
+                raw_paragraph = str(paragraph).strip()
+                if not raw_paragraph:
+                    continue
+                if is_verbal_analitis and "<table" in raw_paragraph.lower():
+                    html_parts.append(raw_paragraph)
+                    explanation_paragraphs_added += 1
+                    continue
+                paragraph = _sanitize_text(raw_paragraph)
                 if not paragraph:
                     continue
-                if is_tiu_numerik:
-                    math_blocks = _split_math_paragraphs(paragraph)
-                    if not math_blocks:
-                        continue
-                    for block in math_blocks:
-                        math_span = _format_math_span(block)
-                        if not math_span:
-                            continue
-                        html_parts.append(_format_paragraph(math_span, styled=False))
-                        explanation_paragraphs_added += 1
-                    continue
-
                 lowered = paragraph.lower()
                 if (
                     lowered.startswith("jawaban yang tepat")
@@ -980,15 +984,27 @@ def generate_ai_explanations(
                     or lowered.startswith("- ")
                 ):
                     continue
+                if is_tiu_numerik:
+                    paragraph = _wrap_math_tex(paragraph)
                 html_parts.append(_format_paragraph(paragraph, styled=use_style))
                 explanation_paragraphs_added += 1
 
-            if main_option and explanation_paragraphs_added == 0 and not is_tiu_numerik:
+            if (
+                main_option
+                and explanation_paragraphs_added == 0
+                and not is_tiu_numerik
+                and not is_verbal_analitis
+            ):
                 default_explanation = (
                     f"{main_option} mencerminkan penghormatan terhadap seni dan budaya lokal. "
                     "Jelaskan bagaimana unsur-unsur budaya dalam opsi tersebut muncul pada konteks soal."
                 )
                 html_parts.append(_format_paragraph(default_explanation, styled=use_style))
+
+            if is_verbal_analitis:
+                table_html = str(data.get("table_html", "")).strip()
+                if table_html and "<table" in table_html.lower():
+                    html_parts.append(table_html)
 
             if incorrect_indices and include_incorrect:
                 html_parts.append(
@@ -1013,7 +1029,7 @@ def generate_ai_explanations(
                     option_score = option_scores[idx] if idx < len(option_scores) else None
                     option_label = _label_with_score(option_text, option_score, include_scores)
                     html_parts.append(
-                        _format_paragraph(f"<strong>{option_label}:</strong> {reason}", styled=True)
+                        _format_paragraph(f"- <strong>{option_label}:</strong> {reason}", styled=True)
                     )
 
             explanation_text = "\n".join(html_parts)
