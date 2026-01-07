@@ -25,6 +25,19 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
 ]
+DEFAULT_SESSION_STATE = {
+    "stage": "init",
+    "sheet_input": "",
+    "client_creds": None,
+    "sheet_names": [],
+    "selected_sheets": [],
+    "dataframes": {},
+    "worksheet_objs": {},
+    "explanation_cols": {},
+    "last_update_summary": [],
+    "pending_save": False,
+    "_creds_tmpdir": None,
+}
 
 
 def centered_button(label: str, key: str, type: str = "primary", disabled: bool = False):
@@ -134,21 +147,19 @@ def set_stage(stage: str, *, pending_save: bool = False) -> None:
 
 
 def ensure_session_defaults() -> None:
-    defaults = {
-        "stage": "init",
-        "sheet_input": "",
-        "client_creds": None,
-        "sheet_names": [],
-        "selected_sheets": [],
-        "dataframes": {},
-        "worksheet_objs": {},
-        "explanation_cols": {},
-        "last_update_summary": [],
-        "pending_save": False,
-        "_creds_tmpdir": None,
-    }
-    for key, value in defaults.items():
+    for key, value in DEFAULT_SESSION_STATE.items():
         st.session_state.setdefault(key, value)
+
+
+def reset_session() -> None:
+    for key, value in DEFAULT_SESSION_STATE.items():
+        if isinstance(value, dict):
+            st.session_state[key] = {}
+        elif isinstance(value, list):
+            st.session_state[key] = []
+        else:
+            st.session_state[key] = value
+    set_stage("init")
 
 
 def _materialize_secret_credentials() -> Optional[str]:
@@ -468,6 +479,13 @@ def stage_generated() -> None:
 def stage_saved() -> None:
     show_summary()
     st.success("Proses selesai.")
+    restart_clicked = centered_button(
+        "Mulai Sesi Baru",
+        key="restart_session",
+        type="secondary",
+    )
+    if restart_clicked:
+        reset_session()
 
 
 def main() -> None:

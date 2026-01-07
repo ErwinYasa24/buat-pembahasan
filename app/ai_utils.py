@@ -294,6 +294,10 @@ _REASON_PREFIXES = [
     re.compile(r"^\s*-\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
     re.compile(r"^\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
 ]
+_DISALLOWED_DETAIL_PREFIX = re.compile(
+    r"^\s*jawaban\s+(yang\s+)?(tepat|benar|kurang\s+tepat|salah)\b",
+    re.IGNORECASE,
+)
 
 
 def _strip_reason_prefix(reason: str) -> str:
@@ -413,6 +417,20 @@ def _normalize_reason_capital(text: str, preserve_tokens: set[str]) -> str:
 
     lowered = word[0].lower() + word[1:]
     return text[: leading_spaces + idx] + lowered + cleaned[idx + len(word) :]
+
+
+def _is_disallowed_detail(text: str) -> bool:
+    lowered = text.strip().lower()
+    if not lowered:
+        return True
+    if _DISALLOWED_DETAIL_PREFIX.match(lowered):
+        return True
+    return (
+        lowered.startswith("- opsi")
+        or lowered.startswith("opsi")
+        or lowered.startswith("- pilihan")
+        or lowered.startswith("- ")
+    )
 
 
 def _enrich_reason(
@@ -864,7 +882,6 @@ def generate_ai_explanations(
                     prompt,
                     generation_config={
                         "response_mime_type": "application/json",
-                        "max_output_tokens": 2048,
                     },
                 )
             except Exception:
@@ -904,7 +921,6 @@ def generate_ai_explanations(
                             retry_prompt,
                             generation_config={
                                 "response_mime_type": "application/json",
-                                "max_output_tokens": 2048,
                             },
                         )
                     except Exception:
@@ -1007,6 +1023,9 @@ def generate_ai_explanations(
                 if is_tiu_numerik:
                     numeric_parts = _split_numeric_paragraphs(raw_paragraph)
                     for part in numeric_parts:
+                        clean_part = _sanitize_text(part)
+                        if _is_disallowed_detail(clean_part):
+                            continue
                         part_wrapped = _wrap_math_tex(part)
                         html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
                         explanation_paragraphs_added += 1
@@ -1017,15 +1036,7 @@ def generate_ai_explanations(
                         plain_chunk = _sanitize_text(chunk)
                         if not plain_chunk:
                             continue
-                        lowered = plain_chunk.lower()
-                        if (
-                            lowered.startswith("jawaban yang tepat")
-                            or lowered.startswith("jawaban yang kurang tepat")
-                            or lowered.startswith("- opsi")
-                            or lowered.startswith("opsi")
-                            or lowered.startswith("- pilihan")
-                            or lowered.startswith("- ")
-                        ):
+                        if _is_disallowed_detail(plain_chunk):
                             continue
                         html_parts.append(_format_paragraph(plain_chunk, styled=use_style))
                         explanation_paragraphs_added += 1
@@ -1033,15 +1044,7 @@ def generate_ai_explanations(
                 plain_check = _sanitize_text(raw_paragraph)
                 if not plain_check:
                     continue
-                lowered = plain_check.lower()
-                if (
-                    lowered.startswith("jawaban yang tepat")
-                    or lowered.startswith("jawaban yang kurang tepat")
-                    or lowered.startswith("- opsi")
-                    or lowered.startswith("opsi")
-                    or lowered.startswith("- pilihan")
-                    or lowered.startswith("- ")
-                ):
+                if _is_disallowed_detail(plain_check):
                     continue
                 html_parts.append(_format_paragraph(plain_check, styled=use_style))
                 explanation_paragraphs_added += 1
