@@ -1,0 +1,818 @@
+"""Utilitas untuk membangun prompt dan memanggil model AI."""
+
+import html
+import json
+import re
+from typing import Dict, List, Optional, Sequence
+
+import pandas as pd
+import streamlit as st
+
+from .config import GEMINI_API_KEY, OPTION_COLUMNS
+
+OPTION_TEXT_LABELS = [label for label in OPTION_COLUMNS.keys() if label != "Pilihan"]
+
+
+def _sanitize_text(value: str) -> str:
+    """Remove HTML tags, entities, and collapse whitespace without altering wording."""
+
+    text = html.unescape(str(value))
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = text.replace("\n", " ").replace("\r", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _normalize_label(value: object) -> str:
+    """Normalize category/subcategory strings for comparisons."""
+
+    if value is None:
+        return ""
+    text = str(value)
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _should_skip_row(category_value: object, sub_category_value: object) -> Optional[str]:
+    """Return reason if a row must be skipped based on TIU subcategories."""
+
+    category_norm = _normalize_label(category_value)
+    if category_norm != "tiu":
+        return None
+
+    sub_norm = _normalize_label(sub_category_value)
+    if not sub_norm:
+        return "subkategori TIU tidak tercantum."
+    if sub_norm.startswith("figural"):
+        return "subkategori TIU figural di-skip."
+    if sub_norm.startswith("numerik deret"):
+        return "subkategori TIU numerik deret di-skip."
+    if sub_norm not in {"verbal", "numerik"}:
+        return "subkategori TIU di luar Verbal/Numerik."
+    return None
+
+
+def _is_tiu_numerik(category_value: object, sub_category_value: object) -> bool:
+    """Return True if category is TIU and subcategory is Numerik."""
+
+    category_norm = _normalize_label(category_value)
+    if category_norm != "tiu":
+        return False
+    sub_norm = _normalize_label(sub_category_value)
+    return sub_norm == "numerik"
+
+
+def _extract_option_scores(row: pd.Series) -> List[Optional[float]]:
+    """Return numeric scores for options A-E in order."""
+
+    scores: List[Optional[float]] = []
+    for label in OPTION_TEXT_LABELS:
+        _, score_col = OPTION_COLUMNS[label]
+        score = row.get(score_col)
+        if pd.isna(score):
+            scores.append(None)
+            continue
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            scores.append(None)
+            continue
+        scores.append(numeric)
+    return scores
+
+
+def _format_score(score: Optional[float]) -> Optional[str]:
+    """Format numeric score without trailing zeros."""
+
+    if score is None:
+        return None
+    text = f"{score}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _score_sort_key(idx: int, scores: List[Optional[float]]) -> tuple[float, int]:
+    score = scores[idx] if idx < len(scores) else None
+    score_value = score if score is not None else float("-inf")
+    return (-score_value, idx)
+
+
+def _order_indices(
+    indices: Sequence[int],
+    scores: List[Optional[float]],
+    option_map: List[str],
+) -> List[int]:
+    """Order option indices from highest to lowest score, stable by option order."""
+
+    seen: set[int] = set()
+    filtered: List[int] = []
+    for idx in indices:
+        if idx in seen or idx >= len(option_map):
+            continue
+        if not option_map[idx]:
+            continue
+        seen.add(idx)
+        filtered.append(idx)
+    return sorted(filtered, key=lambda idx: _score_sort_key(idx, scores))
+
+
+def _label_with_score(option_text: str, score: Optional[float], include_score: bool) -> str:
+    label = option_text.strip()
+    if include_score:
+        score_text = _format_score(score)
+        if score_text:
+            label = f"{label} ({score_text})"
+    return label
+
+
+def _ensure_trailing_period(text: str) -> str:
+    if not text:
+        return text
+    if text.endswith((".", "!", "?")):
+        return text
+    return f"{text}."
+
+
+def _wrap_math_tex(text: str) -> str:
+    """Wrap inline TeX in a math-tex span for TIU numerik output."""
+
+    if not text:
+        return text
+    wrapped = re.sub(
+        r"(\\\(.+?\\\))",
+        r'<span class="math-tex">\1</span>',
+        text,
+    )
+    wrapped = re.sub(
+        r"(\\\[.+?\\\])",
+        r'<span class="math-tex">\1</span>',
+        wrapped,
+    )
+    return wrapped
+
+
+def _strip_math_wrappers(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("\\(") and cleaned.endswith("\\)"):
+        return cleaned[2:-2].strip()
+    if cleaned.startswith("\\[") and cleaned.endswith("\\]"):
+        return cleaned[2:-2].strip()
+    if cleaned.startswith("$$") and cleaned.endswith("$$") and len(cleaned) > 3:
+        return cleaned[2:-2].strip()
+    if cleaned.startswith("$") and cleaned.endswith("$") and len(cleaned) > 1:
+        return cleaned[1:-1].strip()
+    return cleaned
+
+
+def _format_math_span(text: str) -> str:
+    math_text = _strip_math_wrappers(text)
+    if not math_text:
+        return ""
+    return f"<span class=\"math-tex\">\\({math_text}\\)</span>"
+
+
+def _format_paragraph(text: str, styled: bool) -> str:
+    if styled:
+        return f"<p style=\"text-align:justify\">{text}</p>"
+    return f"<p>{text}</p>"
+
+
+_REASON_PREFIXES = [
+    re.compile(r"^\s*jawaban\s+yang\s+kurang\s+tepat\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*jawaban\s+kurang\s+tepat\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*jawaban\s+salah\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*opsi\s+salah\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*-\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
+    re.compile(r"^\s*(opsi|pilihan)\s+[A-E0-9]+\s*[:\-]*\s*", re.IGNORECASE),
+]
+
+
+def _strip_reason_prefix(reason: str) -> str:
+    """Remove repeated labels like 'Jawaban yang kurang tepat' or '- Opsi 1:' from reasons."""
+
+    cleaned = reason.strip()
+    while True:
+        updated = cleaned
+        for pattern in _REASON_PREFIXES:
+            match = pattern.match(updated)
+            if match:
+                updated = updated[match.end() :].strip()
+        updated = updated.lstrip("-: ").strip()
+        if updated == cleaned:
+            break
+        cleaned = updated
+    return cleaned
+
+
+def _strip_option_echo(reason: str, option_text: str) -> str:
+    """Remove duplicated option text at start of reason."""
+
+    cleaned_reason = reason.strip()
+    option_clean = option_text.strip()
+    if not option_clean:
+        return cleaned_reason
+
+    lowered_option = option_clean.lower()
+
+    while True:
+        lowered_reason = cleaned_reason.lower()
+        if not lowered_reason.startswith(lowered_option):
+            break
+        trimmed = cleaned_reason[len(option_clean) :].lstrip(" ,:.-").strip()
+        if not trimmed:
+            cleaned_reason = ""
+            break
+        cleaned_reason = trimmed
+
+    return cleaned_reason
+
+
+def _capitalize_sentence(text: str) -> str:
+    """Capitalize the first alphabetic character unless preceded by a colon."""
+
+    cleaned = text.strip()
+    if not cleaned:
+        return cleaned
+
+    prefix, sep, suffix = cleaned.partition(":")
+    if sep and suffix.strip():
+        return cleaned
+
+    for idx, char in enumerate(cleaned):
+        if char.isalpha():
+            return cleaned[:idx] + char.upper() + cleaned[idx + 1 :]
+        if char.isdigit():
+            return cleaned
+
+    return cleaned
+
+
+def _extract_proper_tokens(*texts: str) -> set[str]:
+    """Collect capitalized tokens to preserve capitalization (names, etc.)."""
+
+    tokens: set[str] = set()
+    for text in texts:
+        if not text:
+            continue
+        for token in re.findall(r"[A-Za-zÀ-ÿ']+", text):
+            if token and token[0].isupper():
+                tokens.add(token)
+    return tokens
+
+
+def _normalize_reason_capital(text: str, preserve_tokens: set[str]) -> str:
+    """Ensure sentences after colon start lowercase unless preserved."""
+
+    original = text
+    if not text:
+        return original
+
+    leading_spaces = len(text) - len(text.lstrip())
+    working = text[leading_spaces:]
+
+    prefix, sep, suffix = working.partition(":")
+    if sep and suffix:
+        rest = suffix.lstrip()
+        if rest.lower().startswith("adalah "):
+            rest = rest[len("adalah ") :]
+        if rest:
+            match = re.match(r"[A-Za-zÀ-ÿ']+", rest)
+            if match:
+                word = match.group(0)
+                if word not in preserve_tokens and word.lower() != "anda":
+                    rest = word.lower() + rest[len(word) :]
+        space_after = suffix[: len(suffix) - len(suffix.lstrip())] or " "
+        if not rest:
+            return original
+        new_working = prefix + sep + space_after + rest
+        return text[:leading_spaces] + new_working
+
+    cleaned = working
+    idx = 0
+    while idx < len(cleaned) and not cleaned[idx].isalpha():
+        idx += 1
+    if idx >= len(cleaned):
+        return original
+
+    match = re.match(r"[A-Za-zÀ-ÿ']+", cleaned[idx:])
+    if not match:
+        return original
+
+    word = match.group(0)
+    if word in preserve_tokens or word.lower() == "anda":
+        return original
+
+    lowered = word[0].lower() + word[1:]
+    return text[: leading_spaces + idx] + lowered + cleaned[idx + len(word) :]
+
+
+def _enrich_reason(
+    option_text: str,
+    reason: str,
+    correct_text: str,
+    question_summary: str,
+) -> str:
+    """Ensure alasan opsi salah cukup detail (minimal dua kalimat)."""
+
+    cleaned_reason = reason.strip()
+    if cleaned_reason and not cleaned_reason.endswith(('.', '!', '?')):
+        cleaned_reason += '.'
+
+    sentence_count = cleaned_reason.count('.') + cleaned_reason.count('!') + cleaned_reason.count('?')
+    word_count = len(cleaned_reason.split())
+
+    supplements: List[str] = []
+    if sentence_count < 2 or word_count < 25:
+        if option_text and correct_text:
+            supplements.append(
+                f"penjelasan ini masih menyoroti {option_text} tanpa mengaitkannya dengan inti soal mengenai {correct_text}."
+            )
+        elif correct_text:
+            supplements.append(
+                f"penjelasan ini belum menunjukkan keterkaitan dengan tuntutan soal tentang {correct_text}."
+            )
+        else:
+            supplements.append(
+                "penjelasan perlu menyebutkan secara spesifik mengapa pilihan ini tidak memenuhi kebutuhan soal."
+            )
+
+    enriched = cleaned_reason
+    if supplements:
+        enriched = enriched if enriched else ""
+        if enriched and not enriched.endswith(' '):
+            enriched += ' '
+        enriched += ' '.join(supplements)
+
+    return enriched.strip()
+
+
+def _infer_correct_indices(row: pd.Series, option_texts: List[str]) -> List[int]:
+    """Determine correct option indices, prioritizing explicit scores."""
+
+    indices: List[int] = []
+    mapping = {
+        "A": 0,
+        "B": 1,
+        "C": 2,
+        "D": 3,
+        "E": 4,
+        "PILIHAN A": 0,
+        "PILIHAN B": 1,
+        "PILIHAN C": 2,
+        "PILIHAN D": 3,
+        "PILIHAN E": 4,
+    }
+
+    scored_options: List[tuple[int, float]] = []
+    option_keys = list(OPTION_COLUMNS.keys())
+    for idx, (_, (_, score_col)) in enumerate(OPTION_COLUMNS.items()):
+        score = row.get(score_col)
+        if pd.isna(score):
+            continue
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            continue
+        scored_options.append((idx, numeric))
+
+    if scored_options:
+        max_score = max(value for _, value in scored_options)
+        for idx, value in scored_options:
+            if value != max_score:
+                continue
+            label = option_keys[idx]
+            if label == "Pilihan":
+                option_letter = str(row.get("option_number", "")).strip().upper()
+                mapped = mapping.get(option_letter)
+                if mapped is not None:
+                    indices.append(mapped)
+            else:
+                indices.append(idx)
+
+    if indices:
+        return list(dict.fromkeys(indices))
+
+    option_number = str(row.get("option_number", "")).strip().upper()
+    if option_number in mapping and mapping[option_number] < len(option_texts):
+        return [mapping[option_number]]
+
+    answer_true = row.get("answer_header_true")
+    if pd.notna(answer_true):
+        cleaned_answer = _sanitize_text(answer_true).lower()
+        for idx, text in enumerate(option_texts):
+            candidate = text.lower().strip()
+            if not candidate:
+                continue
+            if (
+                cleaned_answer == candidate
+                or cleaned_answer.endswith(candidate)
+                or candidate in cleaned_answer
+            ):
+                indices.append(idx)
+        if indices:
+            return indices
+
+    explanation_text = row.get("explanation") or row.get("explanation_ai")
+    if pd.notna(explanation_text):
+        cleaned_explanation = _sanitize_text(explanation_text).lower()
+        match = re.search(
+            r"jawaban yang (?:benar|tepat)\s*[:\-]\s*(.+)",
+            cleaned_explanation,
+        )
+        if match:
+            answer_segment = match.group(1)
+            for idx, text in enumerate(option_texts):
+                candidate = text.lower().strip()
+                if not candidate:
+                    continue
+                if answer_segment.startswith(candidate) or candidate in answer_segment:
+                    indices.append(idx)
+                    break
+        if indices:
+            return indices
+
+    return []
+
+
+def build_prompt(row: pd.Series) -> Dict[str, object]:
+    question_text = str(row.get("question", "")).strip()
+    question_summary = _sanitize_text(question_text)
+    option_map: List[str] = []
+    option_instruction_rows: List[str] = []
+    for idx, label in enumerate(OPTION_TEXT_LABELS):
+        text_col, _ = OPTION_COLUMNS[label]
+        option_text = row.get(text_col)
+        cleaned = ""
+        if pd.notna(option_text) and str(option_text).strip():
+            cleaned = _sanitize_text(option_text)
+            option_instruction_rows.append(f"Opsi {idx + 1}: {cleaned}")
+        option_map.append(cleaned)
+
+    tags = row.get("tags")
+    metadata_parts = [
+        f"Kategori: {row.get('category')}" if pd.notna(row.get("category")) else None,
+        f"Subkategori: {row.get('sub_category')}" if pd.notna(row.get("sub_category")) else None,
+        f"Program: {row.get('program')}" if pd.notna(row.get("program")) else None,
+        f"Tag: {tags}" if pd.notna(tags) else None,
+        f"Keyword: {row.get('question_keyword')}" if pd.notna(row.get("question_keyword")) else None,
+    ]
+    metadata = "\n".join(part for part in metadata_parts if part)
+
+    omit_incorrect = _is_tiu_numerik(row.get("category"), row.get("sub_category"))
+
+    if omit_incorrect:
+        format_template = (
+            "<p><strong>Jawaban yang tepat:&nbsp;</strong><span class=\"math-tex\">\\( ... \\)</span></p>\n"
+            "<p><span class=\"math-tex\">\\( ... \\\\ ... \\)</span></p>"
+        )
+        intro_text = (
+            "Pembahasan harus fokus pada penyajian rumus matematika terkait jawaban benar."
+        )
+    else:
+        format_template = (
+            "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
+            "<p style=\"text-align:justify\">Paragraf penjelasan lanjutan...</p>\n"
+            "<p style=\"text-align:justify\"><strong>Jawaban yang kurang tepat:</strong></p>\n"
+            "<p style=\"text-align:justify\"><strong>Opsi salah 1:</strong> alasan singkat...</p>\n"
+            "<p style=\"text-align:justify\"><strong>Opsi salah 2:</strong> alasan singkat...</p>"
+        )
+        intro_text = (
+            "Pembahasan harus bernas dan mudah dipahami siswa. Jelaskan alasan jawaban benar secara menyeluruh "
+            "(minimal 3 kalimat) dan uraikan mengapa tiap opsi salah tidak memenuhi kriteria."
+        )
+
+    instructions = (
+        "Tulis pembahasan dalam bahasa Indonesia menggunakan HTML tanpa menambahkan <!DOCTYPE>, <html>, <head>, atau <body>. "
+        f"{intro_text} "
+        "Output harus berupa rangkaian tag <p> seperti contoh berikut dan tidak boleh memiliki teks di luar tag tersebut.\n\n"
+        f"Format wajib diikuti:\n{format_template}\n\n"
+        "Aturan tambahan:\n"
+        "- Paragraf pertama harus menyatakan jawaban benar dengan awalan 'Jawaban yang tepat:' diikuti penjelasan singkat. Sertakan teks opsi benar secara utuh sebelum penjelasan.\n"
+        "- Paragraf kedua (dan tambahan bila perlu) menjelaskan alasan jawaban benar secara detail (minimal 2 kalimat).\n"
+        "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
+        "- Jangan menambahkan bobot atau skor ke dalam teks opsi maupun alasan.\n"
+        "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML.\n"
+    )
+
+    if omit_incorrect:
+        instructions += (
+            "\n- Gunakan notasi MathTeX untuk rumus dengan pembungkus `\\( ... \\)`.\n"
+            "- Khusus TIU subkategori Numerik, fokus pada jawaban yang tepat saja. "
+            "Isi `incorrect_reasons` dengan objek kosong {} dan jangan memberikan alasan opsi salah.\n"
+            "- Isi `correct_summary` dan setiap elemen `detail_paragraphs` dengan ekspresi MathTeX saja "
+            "tanpa kalimat atau kata-kata. Gunakan `\\\\` untuk baris baru di dalam satu ekspresi.\n"
+            "- Gunakan tag <p> tanpa atribut style."
+        )
+    else:
+        instructions += (
+            "\n- Gunakan paragraf ketiga dengan teks 'Jawaban yang kurang tepat:' (bold).\n"
+            "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '<strong>...:</strong> penjelasan...'. "
+            "Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. "
+            "Setiap alasan minimal dua kalimat yang jelas.\n"
+            "- Setelah titik dua pada opsi salah, lanjutkan kalimat dengan huruf kecil kecuali untuk nama diri atau kata 'Anda'. "
+            "Hindari mengawali dengan kata 'adalah'.\n"
+            "- Jangan menulis ulang opsi yang benar di bagian opsi salah.\n"
+            "- Nilai dalam `incorrect_reasons` adalah penjelasan mendalam (minimal dua kalimat) untuk tiap opsi salah tanpa menyalin ulang teks opsi.\n"
+            "- Nilai `correct_summary` hanya berisi penjelasan singkat (tanpa kembali menuliskan frasa 'Jawaban yang tepat'). "
+            "Jika tidak ada penjelasan tambahan, kosongkan string tersebut.\n"
+            "- Gunakan style 'text-align:justify' pada setiap tag <p> dan <strong> untuk penekanan."
+        )
+
+    option_instructions = "\n".join(option_instruction_rows)
+    if not option_instructions:
+        option_instructions = "(Tidak ada pilihan)"
+
+    correct_indices = _infer_correct_indices(row, option_map)
+    if correct_indices:
+        textful = [idx for idx in correct_indices if idx < len(option_map) and option_map[idx]]
+        if textful:
+            leftovers = [idx for idx in correct_indices if idx not in textful]
+            correct_indices = textful + leftovers
+
+    incorrect_indices = [
+        idx for idx in range(len(option_map))
+        if idx not in correct_indices and idx < len(option_map) and option_map[idx]
+    ]
+
+    correct_option_display = "\n".join(
+        f"Opsi {idx + 1}: {option_map[idx]}"
+        for idx in correct_indices
+        if idx < len(option_map) and option_map[idx]
+    ) or "(Tidak diketahui)"
+
+    context = (
+        instructions
+        + "\n\n"
+        + metadata
+        + f"\n\nSoal:\n{question_text}\n\nDaftar opsi (gunakan apa adanya untuk bagian opsi salah):\n{option_instructions}\n"
+        + f"Opsi benar (copy teksnya secara utuh ketika menyusun ringkasan):\n{correct_option_display}\n"
+        + f"Opsi salah yang wajib dijelaskan: {', '.join(str(idx + 1) for idx in incorrect_indices)}\n"
+        + "Kembalikan respons dalam format JSON PERSIS seperti berikut tanpa teks tambahan atau blok kode:\n"
+        "{\n"
+        "  \"correct_summary\": string,\n"
+        "  \"detail_paragraphs\": [string, ...],\n"
+        "  \"incorrect_reasons\": {\n"
+        "       \"1\": string alasan (untuk opsi indeks 1 jika salah),\n"
+        "       ...\n"
+        "   }\n"
+        "}\n"
+        "Output TIDAK boleh diawali atau diakhiri dengan karakter selain tanda kurung kurawal JSON."
+    )
+
+    return {
+        "prompt": context,
+        "option_map": option_map,
+        "correct_indices": correct_indices,
+        "incorrect_indices": incorrect_indices,
+        "question_summary": question_summary,
+    }
+
+
+def generate_ai_explanations(
+    df: pd.DataFrame,
+    target_indices: Sequence[object],
+    model_name: str,
+    api_key: Optional[str] = None,
+) -> List[int]:
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        st.error(
+            "Paket `google-generativeai` belum terpasang. Jalankan `pip install google-generativeai` terlebih dahulu."
+        )
+        return []
+
+    effective_key = (api_key or GEMINI_API_KEY or "").strip()
+    if not effective_key or "ISI_API_KEY" in effective_key:
+        secret_key = st.secrets.get("gemini_api_key")
+        if secret_key:
+            effective_key = str(secret_key).strip()
+
+    if not effective_key or "ISI_API_KEY" in effective_key:
+        st.error(
+            "API key Gemini belum dikonfigurasi. Set environment variable `GEMINI_API_KEY` "
+            "atau simpan di `st.secrets['gemini_api_key']`."
+        )
+        return []
+
+    try:
+        genai.configure(api_key=effective_key)
+        model = genai.GenerativeModel(model_name)
+    except Exception as exc:  # pragma: no cover - konfigurasi gagal
+        st.error(f"Gagal menginisialisasi model Gemini: {exc}")
+        return []
+
+    updated_rows: List[int] = []
+    progress = st.progress(0.0)
+    status_text = st.empty()
+
+    for counter, row_idx in enumerate(target_indices, start=1):
+        row = df.loc[row_idx]
+
+        try:
+            skip_reason = _should_skip_row(row.get("category"), row.get("sub_category"))
+            if skip_reason:
+                question_label = row.get("id") or row.get("no") or row_idx
+                st.info(f"Lewati baris {question_label}: {skip_reason}")
+                continue
+
+            prompt_data = build_prompt(row)
+            prompt = prompt_data["prompt"]
+            option_map: List[str] = prompt_data["option_map"]
+            correct_indices: List[int] = prompt_data["correct_indices"]
+            incorrect_indices: List[int] = prompt_data["incorrect_indices"]
+            question_summary: str = prompt_data.get("question_summary", "")
+            option_scores = _extract_option_scores(row)
+            include_scores = _normalize_label(row.get("category")) == "tkp"
+            is_tiu_numerik = _is_tiu_numerik(
+                row.get("category"),
+                row.get("sub_category"),
+            )
+            include_incorrect = not is_tiu_numerik
+
+            correct_indices = _order_indices(correct_indices, option_scores, option_map)
+            incorrect_indices = _order_indices(incorrect_indices, option_scores, option_map)
+
+            if not correct_indices:
+                question_label = row.get("id") or row.get("no") or row_idx
+                st.warning(
+                    f"Lewati baris {question_label}: tidak menemukan jawaban benar pada data sumber."
+                )
+                continue
+
+            response = model.generate_content(prompt)
+            raw_text = (response.text or "").strip()
+            raw_text = raw_text.replace("```,", "```")
+            if raw_text.startswith("```"):
+                raw_text = raw_text.strip()
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[len("```json"):]
+                raw_text = raw_text.strip("`").strip()
+
+            parsed = None
+            try:
+                parsed = json.loads(raw_text)
+            except json.JSONDecodeError:
+                start = raw_text.find("{")
+                end = raw_text.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    candidate = raw_text[start : end + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        parsed = None
+            if parsed is None:
+                st.warning(
+                    f"Format respons tidak valid untuk baris {row_idx}. Mengabaikan pembaruan."
+                )
+                continue
+
+            data = parsed
+
+            correct_summary = str(data.get("correct_summary", "")).strip()
+            detail_paragraphs_raw = data.get("detail_paragraphs") or []
+            if isinstance(detail_paragraphs_raw, str):
+                detail_paragraphs = [detail_paragraphs_raw]
+            else:
+                detail_paragraphs = list(detail_paragraphs_raw)
+            incorrect_reasons = data.get("incorrect_reasons") or {}
+
+            html_parts: List[str] = []
+
+            if not correct_summary and correct_indices:
+                first_idx = correct_indices[0]
+                if first_idx < len(option_map):
+                    correct_summary = option_map[first_idx]
+
+            main_option = ""
+            main_score: Optional[float] = None
+            if correct_indices:
+                idx0 = correct_indices[0]
+                if idx0 < len(option_map):
+                    main_option = option_map[idx0].strip()
+                    if idx0 < len(option_scores):
+                        main_score = option_scores[idx0]
+
+            primary_text = ""
+            explanation = ""
+
+            use_style = not is_tiu_numerik
+
+            if correct_summary or main_option:
+                correct_text = _sanitize_text(correct_summary)
+                correct_text = re.sub(
+                    r"^jawaban yang tepat[\s:,-]*", "", correct_text, flags=re.IGNORECASE
+                ).strip()
+
+                if not main_option and correct_text:
+                    lowered = correct_text.lower()
+                    for text in option_map:
+                        if text and text.lower() == lowered:
+                            main_option = text
+                            break
+
+                if main_option:
+                    primary_text = main_option
+                    explanation_core = _strip_option_echo(correct_text, main_option)
+                else:
+                    primary_text = correct_text
+                    explanation_core = ""
+
+                primary_text = primary_text.strip()
+                explanation_core = explanation_core.strip()
+
+                if explanation_core and explanation_core.lower() == primary_text.lower():
+                    explanation_core = ""
+
+                if primary_text:
+                    primary_label = _label_with_score(primary_text, main_score, include_scores)
+                    if is_tiu_numerik:
+                        math_span = _format_math_span(primary_label)
+                        first_line = f"<strong>Jawaban yang tepat:&nbsp;</strong>{math_span}"
+                        html_parts.append(_format_paragraph(first_line, styled=False))
+                    else:
+                        correct_line = _ensure_trailing_period(
+                            f"Jawaban yang tepat: {primary_label}"
+                        )
+                        html_parts.append(
+                            _format_paragraph(f"<strong>{correct_line}</strong>", styled=True)
+                        )
+
+                if explanation_core and not detail_paragraphs:
+                    explanation_sentence = explanation_core.strip()
+                    if explanation_sentence:
+                        explanation_sentence = explanation_sentence[0].upper() + explanation_sentence[1:]
+                        if explanation_sentence[-1] not in ".!?":
+                            explanation_sentence += "."
+                        detail_paragraphs = [explanation_sentence]
+
+            explanation_paragraphs_added = 0
+            for paragraph in detail_paragraphs:
+                paragraph = _sanitize_text(paragraph)
+                if not paragraph:
+                    continue
+                if is_tiu_numerik:
+                    math_span = _format_math_span(paragraph)
+                    if not math_span:
+                        continue
+                    html_parts.append(_format_paragraph(math_span, styled=False))
+                    explanation_paragraphs_added += 1
+                    continue
+
+                lowered = paragraph.lower()
+                if (
+                    lowered.startswith("jawaban yang tepat")
+                    or lowered.startswith("jawaban yang kurang tepat")
+                    or lowered.startswith("- opsi")
+                    or lowered.startswith("opsi")
+                    or lowered.startswith("- pilihan")
+                    or lowered.startswith("- ")
+                ):
+                    continue
+                html_parts.append(_format_paragraph(paragraph, styled=use_style))
+                explanation_paragraphs_added += 1
+
+            if main_option and explanation_paragraphs_added == 0 and not is_tiu_numerik:
+                default_explanation = (
+                    f"{main_option} mencerminkan penghormatan terhadap seni dan budaya lokal. "
+                    "Jelaskan bagaimana unsur-unsur budaya dalam opsi tersebut muncul pada konteks soal."
+                )
+                html_parts.append(_format_paragraph(default_explanation, styled=use_style))
+
+            if incorrect_indices and include_incorrect:
+                html_parts.append(
+                    _format_paragraph("<strong>Jawaban yang kurang tepat:</strong>", styled=True)
+                )
+                for idx in incorrect_indices:
+                    if idx >= len(option_map):
+                        continue
+                    option_text = option_map[idx]
+                    if not option_text:
+                        continue
+                    if main_option and option_text.strip().lower() == main_option.strip().lower():
+                        continue
+                    reason = str(incorrect_reasons.get(str(idx + 1), "")).strip()
+                    reason = _sanitize_text(reason)
+                    reason = _strip_reason_prefix(reason)
+                    reason = _strip_option_echo(reason, option_text)
+                    reason = _enrich_reason(option_text, reason, main_option, question_summary)
+                    if reason:
+                        preserve_tokens = _extract_proper_tokens(option_text, main_option)
+                        reason = _normalize_reason_capital(reason, preserve_tokens)
+                    option_score = option_scores[idx] if idx < len(option_scores) else None
+                    option_label = _label_with_score(option_text, option_score, include_scores)
+                    html_parts.append(
+                        _format_paragraph(f"<strong>{option_label}:</strong> {reason}", styled=True)
+                    )
+
+            explanation_text = "\n".join(html_parts)
+
+            df.at[row_idx, "explanation_ai"] = explanation_text
+            updated_rows.append(row_idx)
+        except Exception as exc:  # pragma: no cover - ditampilkan ke pengguna
+            st.warning(f"Gagal membuat pembahasan untuk baris {row_idx}: {exc}")
+        finally:
+            progress.progress(counter / len(target_indices))
+            status_text.info(f"Memproses {counter}/{len(target_indices)}")
+
+    progress.progress(1.0)
+    status_text.success("Selesai memproses seluruh permintaan.")
+    return updated_rows
