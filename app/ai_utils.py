@@ -680,7 +680,9 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "antar premis serta batasan kesimpulan.\n"
             "- Akhiri dengan kesimpulan akhir yang eksplisit dan mudah dipahami.\n"
             "- Gunakan bahasa sederhana, logis, edukatif; hindari simbol logika formal tanpa penjelasan konsep.\n"
-            "- Bagi `detail_paragraphs` menjadi 4 paragraf: premis, simbol, proses, kesimpulan."
+            "- Bagi `detail_paragraphs` menjadi 4 paragraf: premis, simbol, proses, kesimpulan.\n"
+            "- Gunakan baris baru (newline) di dalam paragraf untuk memisahkan subbagian; sistem akan "
+            "mengubahnya menjadi paragraf terpisah."
         )
     elif is_verbal_analogi:
         instructions += (
@@ -841,6 +843,10 @@ def generate_ai_explanations(
                 row.get("category"),
                 row.get("sub_category"),
             )
+            is_verbal_silogisme = _is_verbal_silogisme(
+                row.get("category"),
+                row.get("sub_category"),
+            )
             include_incorrect = not is_tiu_numerik
 
             correct_indices = _order_indices(correct_indices, option_scores, option_map)
@@ -998,6 +1004,32 @@ def generate_ai_explanations(
                     html_parts.append(raw_paragraph)
                     explanation_paragraphs_added += 1
                     continue
+                if is_tiu_numerik:
+                    numeric_parts = _split_numeric_paragraphs(raw_paragraph)
+                    for part in numeric_parts:
+                        part_wrapped = _wrap_math_tex(part)
+                        html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
+                        explanation_paragraphs_added += 1
+                    continue
+                if is_verbal_silogisme:
+                    chunks = re.split(r"(?:\r?\n|<br\s*/?>)+", raw_paragraph, flags=re.IGNORECASE)
+                    for chunk in chunks:
+                        plain_chunk = _sanitize_text(chunk)
+                        if not plain_chunk:
+                            continue
+                        lowered = plain_chunk.lower()
+                        if (
+                            lowered.startswith("jawaban yang tepat")
+                            or lowered.startswith("jawaban yang kurang tepat")
+                            or lowered.startswith("- opsi")
+                            or lowered.startswith("opsi")
+                            or lowered.startswith("- pilihan")
+                            or lowered.startswith("- ")
+                        ):
+                            continue
+                        html_parts.append(_format_paragraph(plain_chunk, styled=use_style))
+                        explanation_paragraphs_added += 1
+                    continue
                 plain_check = _sanitize_text(raw_paragraph)
                 if not plain_check:
                     continue
@@ -1010,13 +1042,6 @@ def generate_ai_explanations(
                     or lowered.startswith("- pilihan")
                     or lowered.startswith("- ")
                 ):
-                    continue
-                if is_tiu_numerik:
-                    numeric_parts = _split_numeric_paragraphs(raw_paragraph)
-                    for part in numeric_parts:
-                        part_wrapped = _wrap_math_tex(part)
-                        html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
-                        explanation_paragraphs_added += 1
                     continue
                 html_parts.append(_format_paragraph(plain_check, styled=use_style))
                 explanation_paragraphs_added += 1
