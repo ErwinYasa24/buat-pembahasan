@@ -11,7 +11,7 @@ import streamlit as st
 from .config import GEMINI_API_KEY, OPTION_COLUMNS
 
 OPTION_TEXT_LABELS = [label for label in OPTION_COLUMNS.keys() if label != "Pilihan"]
-MIN_NUMERIC_PARAGRAPHS = 3
+MIN_NUMERIC_PARAGRAPHS = 4
 TABLE_STYLE = "border-collapse:collapse; table-layout:auto; width:50%"
 TABLE_CELL_STYLE = "text-align:center; white-space:nowrap"
 
@@ -164,6 +164,22 @@ def _wrap_math_tex(text: str) -> str:
         wrapped,
     )
     return wrapped
+
+
+def _split_numeric_paragraphs(text: str) -> List[str]:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^\s*<p[^>]*>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</p>\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</?span[^>]*>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<br\s*/?>", "\n", cleaned, flags=re.IGNORECASE)
+    parts = [part.strip() for part in cleaned.splitlines()]
+    return [part for part in parts if part]
+
+
+def _truncate_text(text: str, limit: int = 4000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n... (dipotong)"
 
 
 def _format_paragraph(text: str, styled: bool) -> str:
@@ -559,11 +575,10 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
     if omit_incorrect:
         format_template = (
             "<p style=\"text-align:justify\"><strong>Jawaban yang tepat: ...</strong></p>\n"
-            "<p style=\"text-align:justify\">Langkah 1 ...</p>\n"
-            "<p style=\"text-align:justify\">Langkah 2 ...</p>"
+            "<p style=\"text-align:justify\">Penjelasan naratif dengan line break...</p>"
         )
         intro_text = (
-            "Pembahasan harus jelas dan mudah dimengerti dengan langkah penyelesaian yang runtut."
+            "Gunakan gaya bahasa formal, edukatif, dan jelas dengan langkah penyelesaian yang runtut."
         )
     elif is_verbal_silogisme:
         format_template = (
@@ -633,16 +648,25 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menambahkan bobot atau skor ke dalam teks opsi maupun alasan.\n"
         "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML, kecuali `table_html` jika diminta.\n"
+        "- Khusus TIU Numerik, boleh menggunakan tag `<strong>` dan `<em>` di dalam `detail_paragraphs`.\n"
     )
 
     if omit_incorrect:
         instructions += (
             "\n- Khusus TIU subkategori Numerik, fokus pada jawaban yang tepat saja. "
             "Isi `incorrect_reasons` dengan objek kosong {} dan jangan memberikan alasan opsi salah.\n"
-            "- Jelaskan langkah demi langkah secara naratif. Setiap elemen `detail_paragraphs` berisi satu langkah.\n"
+            "- Jelaskan langkah demi langkah secara naratif dengan gaya formal dan edukatif.\n"
+            "- Setiap elemen `detail_paragraphs` adalah satu paragraf terpisah.\n"
+            "- Pisahkan kalimat penjelasan dan rumus ke paragraf terpisah (rumus berdiri sendiri di paragraf sendiri).\n"
+            "- Jangan gunakan `<br />`, `<ol>`, `<ul>`, atau tag `<p>` di dalam `detail_paragraphs`.\n"
+            "- Boleh menggunakan tag `<strong>` dan `<em>` untuk penekanan sederhana di dalam paragraf.\n"
+            "- Hindari label seperti 'Langkah 1/2/3' dan jangan gunakan <ol>/<ul>.\n"
             "- Isi `correct_summary` hanya dengan jawaban yang tepat tanpa penjelasan tambahan.\n"
             r"- Gunakan MathTeX inline dengan pembungkus `\( ... \)` untuk rumus di dalam kalimat.\n"
-            "- Buat minimal 3 elemen `detail_paragraphs` berbeda tanpa duplikasi.\n"
+            "- Jangan menuliskan tag `<span class=\"math-tex\">` karena sistem akan membungkus otomatis.\n"
+            "- Jika ada rumus umum, tulis kalimat '... dihitung dengan rumus' lalu tampilkan rumus, "
+            "lanjutkan dengan paragraf 'Substitusikan nilainya:', 'Hitung selisihnya:', "
+            "'Sederhanakan pecahan:', dan tutup dengan paragraf kesimpulan.\n"
             "- Pastikan JSON valid dengan meng-escape backslash sebagai `\\\\` di dalam string JSON."
         )
     elif is_verbal_silogisme:
@@ -853,6 +877,9 @@ def generate_ai_explanations(
                 st.warning(
                     f"Format respons tidak valid untuk nomor {question_label}. Mengabaikan pembaruan."
                 )
+                if raw_text:
+                    with st.expander(f"Detail respons AI untuk nomor {question_label}"):
+                        st.code(_truncate_text(raw_text), language="text")
                 continue
 
             if is_tiu_numerik:
@@ -971,10 +998,10 @@ def generate_ai_explanations(
                     html_parts.append(raw_paragraph)
                     explanation_paragraphs_added += 1
                     continue
-                paragraph = _sanitize_text(raw_paragraph)
-                if not paragraph:
+                plain_check = _sanitize_text(raw_paragraph)
+                if not plain_check:
                     continue
-                lowered = paragraph.lower()
+                lowered = plain_check.lower()
                 if (
                     lowered.startswith("jawaban yang tepat")
                     or lowered.startswith("jawaban yang kurang tepat")
@@ -985,8 +1012,13 @@ def generate_ai_explanations(
                 ):
                     continue
                 if is_tiu_numerik:
-                    paragraph = _wrap_math_tex(paragraph)
-                html_parts.append(_format_paragraph(paragraph, styled=use_style))
+                    numeric_parts = _split_numeric_paragraphs(raw_paragraph)
+                    for part in numeric_parts:
+                        part_wrapped = _wrap_math_tex(part)
+                        html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
+                        explanation_paragraphs_added += 1
+                    continue
+                html_parts.append(_format_paragraph(plain_check, styled=use_style))
                 explanation_paragraphs_added += 1
 
             if (
