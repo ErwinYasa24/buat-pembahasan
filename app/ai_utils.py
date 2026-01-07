@@ -179,8 +179,12 @@ def _split_math_paragraphs(text: str) -> List[str]:
     if not cleaned:
         return []
     if "\\text{" in cleaned:
-        parts = [part.strip() for part in re.split(r"(?=\\text\{)", cleaned) if part.strip()]
-        if parts:
+        parts = [
+            part.strip()
+            for part in re.split(r"(?=\\text\{[^}]*:)", cleaned)
+            if part.strip()
+        ]
+        if len(parts) > 1:
             return parts
     return [cleaned]
 
