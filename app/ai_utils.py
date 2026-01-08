@@ -827,7 +827,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "\n3. GUNAKAN KATA RUJUKAN: Mulailah penjelasan Poin 5 dengan kata ganti, contoh: 'Langkah ini...', "
             "'Tindakan proaktif tersebut...', 'Keputusan ini...'."
             "\n4. STRUKTUR PENJELASAN POIN 5: "
-            "   - Jelaskan HUBUNGAN tindakan dengan INDIKATOR (misal: integritas, empati)."
+            "   - Jelaskan HUBUNGAN tindakan dengan indikator yang relevan."
             "   - Jelaskan DAMPAK positif jangka panjang dari tindakan tersebut."
             "   - (Opsional) Bandingkan kenapa ini lebih efektif daripada opsi pengecoh."
             "\n5. GRADASI NILAI:"
