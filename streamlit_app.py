@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -26,6 +27,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 AUTO_SAVE_BATCH_SIZE = 50
+MAX_BATCH_RETRIES = 2
+RETRY_BACKOFF_SECONDS = [60, 120]
 DEFAULT_SESSION_STATE = {
     "stage": "init",
     "sheet_input": "",
@@ -408,13 +411,36 @@ def stage_fetched(default_mode: int = 0) -> None:
             for batch_index in range(total_batches):
                 start = batch_index * AUTO_SAVE_BATCH_SIZE
                 batch = target_indices[start : start + AUTO_SAVE_BATCH_SIZE]
-                with st.spinner(
-                    f"Memproses {sheet_name} (batch {batch_index + 1}/{total_batches})..."
-                ):
-                    batch_updates = generate_ai_explanations(
-                        sheet_df,
-                        batch,
-                        model_name=DEFAULT_MODEL,
+                batch_updates: List[int] = []
+                for attempt in range(MAX_BATCH_RETRIES + 1):
+                    try:
+                        with st.spinner(
+                            f"Memproses {sheet_name} (batch {batch_index + 1}/{total_batches})..."
+                        ):
+                            batch_updates = generate_ai_explanations(
+                                sheet_df,
+                                batch,
+                                model_name=DEFAULT_MODEL,
+                            )
+                    except Exception as exc:  # pragma: no cover
+                        st.warning(
+                            f"{sheet_name}: batch {batch_index + 1} gagal diproses ({exc})."
+                        )
+                        batch_updates = []
+                    if batch_updates:
+                        break
+                    if attempt < MAX_BATCH_RETRIES:
+                        wait_seconds = RETRY_BACKOFF_SECONDS[
+                            min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)
+                        ]
+                        st.info(
+                            f"{sheet_name}: batch {batch_index + 1} kosong. "
+                            f"Mencoba ulang dalam {wait_seconds} detik..."
+                        )
+                        time.sleep(wait_seconds)
+                if not batch_updates:
+                    st.warning(
+                        f"{sheet_name}: batch {batch_index + 1} gagal setelah retry."
                     )
                 if batch_updates:
                     updated_rows.extend(batch_updates)
