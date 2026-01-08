@@ -25,6 +25,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
 ]
+AUTO_SAVE_BATCH_SIZE = 50
 DEFAULT_SESSION_STATE = {
     "stage": "init",
     "sheet_input": "",
@@ -402,18 +403,36 @@ def stage_fetched(default_mode: int = 0) -> None:
                 )
                 continue
 
-            with st.spinner(f"Memproses {sheet_name}..."):
-                updated_rows = generate_ai_explanations(
-                    sheet_df,
-                    target_indices,
-                    model_name=DEFAULT_MODEL,
-                )
+            updated_rows: List[int] = []
+            total_batches = max(1, (len(target_indices) + AUTO_SAVE_BATCH_SIZE - 1) // AUTO_SAVE_BATCH_SIZE)
+            for batch_index in range(total_batches):
+                start = batch_index * AUTO_SAVE_BATCH_SIZE
+                batch = target_indices[start : start + AUTO_SAVE_BATCH_SIZE]
+                with st.spinner(
+                    f"Memproses {sheet_name} (batch {batch_index + 1}/{total_batches})..."
+                ):
+                    batch_updates = generate_ai_explanations(
+                        sheet_df,
+                        batch,
+                        model_name=DEFAULT_MODEL,
+                    )
+                if batch_updates:
+                    updated_rows.extend(batch_updates)
+                    values = sheet_df[EXPLANATION_COLUMN].fillna("").astype(str).tolist()
+                    update_explanation_column(
+                        worksheet,
+                        explanation_cols[sheet_name],
+                        values,
+                    )
+                    st.info(
+                        f"{sheet_name}: batch {batch_index + 1} tersimpan ke Google Sheets."
+                    )
 
             if updated_rows:
                 df_map[sheet_name] = sheet_df
                 updated_any = True
                 sheet_summaries.append(
-                    f"{sheet_name}: {len(updated_rows)} baris diperbarui."
+                    f"{sheet_name}: {len(updated_rows)} baris diperbarui dan tersimpan."
                 )
             else:
                 sheet_summaries.append(
@@ -426,8 +445,8 @@ def stage_fetched(default_mode: int = 0) -> None:
         st.session_state["last_update_summary"] = sheet_summaries
 
         if updated_any:
-            st.success("Pembahasan berhasil diperbarui. Simpan perubahan ke Google Sheets.")
-            set_stage("generated", pending_save=True)
+            st.success("Pembahasan berhasil diperbarui dan langsung tersimpan ke Google Sheets.")
+            set_stage("saved", pending_save=False)
         else:
             st.warning("Tidak ada baris yang berhasil diperbarui.")
             st.session_state["stage"] = "fetched"
