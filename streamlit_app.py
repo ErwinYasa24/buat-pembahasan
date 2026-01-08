@@ -336,7 +336,7 @@ def display_tabs(df_map: Dict[str, pd.DataFrame]) -> None:
         with tab:
             st.subheader(f"Worksheet: {sheet_name}")
             st.dataframe(df_map[sheet_name].head(), use_container_width=True)
-            st.write(f"Total baris: {len(df_map[sheet_name])}")
+            st.write(f"Total soal: {len(df_map[sheet_name])}")
 
 
 def stage_fetched(default_mode: int = 0) -> None:
