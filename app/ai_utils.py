@@ -93,6 +93,16 @@ def _is_tkp(category_value: object) -> bool:
     return _normalize_label(category_value) == "tkp"
 
 
+def _should_include_scores(category_value: object, program_value: object) -> bool:
+    if _is_tkp(category_value):
+        return True
+    category_norm = _normalize_label(category_value)
+    program_norm = _normalize_label(program_value)
+    if program_norm != "pppk":
+        return False
+    return category_norm in {"wawancara", "sosial kultural", "manajerial"}
+
+
 def _tkp_expected_aspect(sub_category_value: object) -> Optional[str]:
     sub_norm = _normalize_label(sub_category_value)
     if "jejaring" in sub_norm:
@@ -953,7 +963,10 @@ def generate_ai_explanations(
             incorrect_indices: List[int] = prompt_data["incorrect_indices"]
             question_summary: str = prompt_data.get("question_summary", "")
             option_scores = _extract_option_scores(row)
-            include_scores = _normalize_label(row.get("category")) == "tkp"
+            include_scores = _should_include_scores(
+                row.get("category"),
+                row.get("program"),
+            )
             is_tiu_numerik = _is_tiu_numerik(
                 row.get("category"),
                 row.get("sub_category"),
