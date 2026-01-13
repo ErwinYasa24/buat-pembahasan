@@ -419,6 +419,73 @@ def _strip_option_echo(reason: str, option_text: str) -> str:
     return cleaned_reason
 
 
+def _match_reason_option_index(
+    reason: str,
+    option_map: List[str],
+    current_idx: int,
+    candidate_indices: Sequence[int],
+) -> Optional[int]:
+    cleaned_reason = _sanitize_text(reason).lower()
+    if not cleaned_reason:
+        return None
+    for idx in candidate_indices:
+        if idx == current_idx:
+            continue
+        option_text = option_map[idx]
+        if not option_text:
+            continue
+        cleaned_option = _sanitize_text(option_text).lower()
+        if len(cleaned_option) < 12:
+            continue
+        if cleaned_option in cleaned_reason:
+            return idx
+    return None
+
+
+def _realign_incorrect_reasons(
+    incorrect_reasons: Dict[str, object],
+    option_map: List[str],
+    incorrect_indices: Sequence[int],
+) -> Dict[str, str]:
+    if not incorrect_reasons:
+        return {}
+    normalized: Dict[str, str] = {}
+    for key, value in incorrect_reasons.items():
+        try:
+            idx = int(str(key).strip())
+        except (TypeError, ValueError):
+            continue
+        normalized[str(idx)] = str(value).strip()
+    if not normalized:
+        return {}
+
+    remapped: Dict[str, str] = {}
+    used_sources: set[str] = set()
+    for idx in incorrect_indices:
+        key = str(idx + 1)
+        reason = normalized.get(key, "")
+        if not reason:
+            continue
+        matched_idx = _match_reason_option_index(
+            reason, option_map, idx, incorrect_indices
+        )
+        if matched_idx is None:
+            continue
+        target_key = str(matched_idx + 1)
+        if target_key not in remapped:
+            remapped[target_key] = reason
+            used_sources.add(key)
+
+    for idx in incorrect_indices:
+        key = str(idx + 1)
+        if key in remapped:
+            continue
+        if key in normalized and key not in used_sources:
+            remapped[key] = normalized[key]
+
+    return remapped or normalized
+
+
 def _capitalize_sentence(text: str) -> str:
     """Capitalize the first alphabetic character unless preceded by a colon."""
 
@@ -816,6 +883,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Tambahkan paragraf terpisah untuk setiap opsi salah dengan format '- <strong>...:</strong> penjelasan...'. "
         "Teks sebelum titik dua HARUS persis menyalin isi opsi tanpa perubahan atau sinonim. "
         "Setiap alasan minimal dua kalimat yang jelas.\n"
+        "- Kunci `incorrect_reasons` harus sesuai nomor opsi pada daftar (1 untuk Opsi 1, dst) tanpa menggeser urutan.\n"
         "- Setelah titik dua pada opsi salah, lanjutkan kalimat dengan huruf kecil kecuali untuk nama diri atau kata 'Anda'. "
         "Hindari mengawali dengan kata 'adalah'.\n"
         "- Jangan menulis ulang opsi yang benar di bagian opsi salah.\n"
@@ -1091,6 +1159,9 @@ def generate_ai_explanations(
                 data.get("detail_paragraphs")
             )
             incorrect_reasons = data.get("incorrect_reasons") or {}
+            incorrect_reasons = _realign_incorrect_reasons(
+                incorrect_reasons, option_map, incorrect_indices
+            )
 
             if is_tiu_numerik:
                 detail_paragraphs = _dedupe_paragraphs(detail_paragraphs)
