@@ -486,6 +486,57 @@ def _realign_incorrect_reasons(
     return remapped or normalized
 
 
+def _build_incorrect_prompt(
+    *,
+    question_text: str,
+    option_text: str,
+    correct_text: str,
+    option_score: Optional[float],
+    correct_score: Optional[float],
+    category: object,
+    sub_category: object,
+    program: object,
+) -> str:
+    metadata_parts = [
+        f"Kategori: {category}" if pd.notna(category) else None,
+        f"Subkategori: {sub_category}" if pd.notna(sub_category) else None,
+        f"Program: {program}" if pd.notna(program) else None,
+    ]
+    metadata = "\n".join(part for part in metadata_parts if part)
+    instructions = (
+        "Tulis alasan mengapa opsi berikut kurang tepat dibandingkan jawaban benar. "
+        "Gunakan bahasa Indonesia yang jelas dan singkat, minimal 2 kalimat. "
+        "Jangan menyalin ulang teks opsi, jangan menyebut huruf A/B/C, dan jangan menulis 'Jawaban yang ...'. "
+        "Kembalikan JSON valid dengan satu kunci `reason` saja."
+    )
+    if _is_tkp(category):
+        instructions += " Gunakan gaya analitis dan profesional sesuai mindset ASN."
+
+    score_lines: List[str] = []
+    option_score_text = _format_score(option_score)
+    correct_score_text = _format_score(correct_score)
+    if option_score_text is not None:
+        score_lines.append(f"Skor opsi ini: {option_score_text}")
+    if correct_score_text is not None:
+        score_lines.append(f"Skor jawaban benar: {correct_score_text}")
+    score_block = "\n".join(score_lines)
+    if score_block:
+        score_block = f"{score_block}\n\n"
+
+    prompt = (
+        f"{instructions}\n\n"
+        f"{metadata}\n\n"
+        f"Soal:\n{question_text}\n\n"
+        f"Jawaban benar (jangan diulang):\n{correct_text}\n\n"
+        f"{score_block}"
+        f"Opsi yang dinilai kurang tepat:\n{option_text}\n\n"
+        "Format JSON wajib:\n"
+        "{\n  \"reason\": string\n}\n"
+        "Output tidak boleh diawali atau diakhiri dengan teks selain JSON."
+    )
+    return prompt
+
+
 def _capitalize_sentence(text: str) -> str:
     """Capitalize the first alphabetic character unless preceded by a colon."""
 
@@ -1186,6 +1237,56 @@ def generate_ai_explanations(
             explanation = ""
 
             use_style = True
+
+            if include_incorrect and incorrect_indices:
+                correct_text_for_prompt = main_option or correct_summary
+                per_option_reasons: Dict[str, str] = {}
+                for idx in incorrect_indices:
+                    if idx >= len(option_map):
+                        continue
+                    option_text = option_map[idx]
+                    if not option_text:
+                        continue
+                    if main_option and option_text.strip().lower() == main_option.strip().lower():
+                        continue
+                    prompt_incorrect = _build_incorrect_prompt(
+                        question_text=str(row.get("question", "")).strip(),
+                        option_text=option_text,
+                        correct_text=correct_text_for_prompt,
+                        option_score=option_scores[idx] if idx < len(option_scores) else None,
+                        correct_score=main_score,
+                        category=row.get("category"),
+                        sub_category=row.get("sub_category"),
+                        program=row.get("program"),
+                    )
+                    try:
+                        incorrect_response = model.generate_content(
+                            prompt_incorrect,
+                            generation_config={
+                                "response_mime_type": "application/json",
+                            },
+                        )
+                    except Exception:
+                        incorrect_response = model.generate_content(prompt_incorrect)
+                    incorrect_raw = (incorrect_response.text or "").strip()
+                    incorrect_raw = incorrect_raw.replace("```,", "```")
+                    if incorrect_raw.startswith("```"):
+                        incorrect_raw = incorrect_raw.strip()
+                        if incorrect_raw.startswith("```json"):
+                            incorrect_raw = incorrect_raw[len("```json"):]
+                        incorrect_raw = incorrect_raw.strip("`").strip()
+                    incorrect_data = _parse_response(incorrect_raw)
+                    reason = ""
+                    if isinstance(incorrect_data, dict):
+                        reason = str(incorrect_data.get("reason", "")).strip()
+                    if not reason:
+                        reason = str(incorrect_reasons.get(str(idx + 1), "")).strip()
+                    if is_tkp and reason:
+                        reason = _filter_tkp_aspects(reason, tkp_expected_aspect)
+                    if reason:
+                        per_option_reasons[str(idx + 1)] = reason
+                if per_option_reasons:
+                    incorrect_reasons = per_option_reasons
 
             if correct_summary or main_option:
                 correct_text = _sanitize_text(correct_summary)
