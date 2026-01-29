@@ -286,6 +286,15 @@ def _repair_json_text(raw_text: str) -> str:
     while idx < length:
         char = raw_text[idx]
         if char == "\"" and not _is_escaped(raw_text, idx):
+            if in_string:
+                look_idx = idx + 1
+                while look_idx < length and raw_text[look_idx].isspace():
+                    look_idx += 1
+                next_char = raw_text[look_idx] if look_idx < length else ""
+                if next_char and next_char not in [",", "}", "]"]:
+                    result.append("\\\"")
+                    idx += 1
+                    continue
             in_string = not in_string
             result.append(char)
             idx += 1
@@ -313,6 +322,20 @@ def _repair_json_text(raw_text: str) -> str:
         result.append(char)
         idx += 1
     return "".join(result)
+
+
+def _strip_markdown_emphasis(text: str) -> str:
+    if not text:
+        return text
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+    return cleaned.replace("*", "")
+
+
+def _strip_quotes(text: str) -> str:
+    if not text:
+        return text
+    return text.replace("\"", "").replace("'", "")
 
 
 def _dedupe_paragraphs(paragraphs: Sequence[str]) -> List[str]:
@@ -507,7 +530,8 @@ def _build_incorrect_prompt(
         "Tulis alasan mengapa opsi berikut kurang tepat dibandingkan jawaban benar. "
         "Gunakan bahasa Indonesia yang jelas dan singkat, minimal 2 kalimat. "
         "Jangan menyalin ulang teks opsi, jangan menyebut huruf A/B/C, dan jangan menulis 'Jawaban yang ...'. "
-        "Kembalikan JSON valid dengan satu kunci `reason` saja."
+        "Kembalikan JSON valid dengan satu kunci `reason` saja. "
+        "Jangan gunakan format Markdown atau tanda kutip/petik di dalam isi string."
     )
     if _is_tkp(category):
         instructions += " Gunakan gaya analitis dan profesional sesuai mindset ASN."
@@ -874,6 +898,8 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Jangan menambahkan bobot atau skor ke dalam teks opsi maupun alasan.\n"
         "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML, kecuali `table_html` jika diminta.\n"
         "- Khusus TIU Numerik, boleh menggunakan tag `<strong>` dan `<em>` di dalam `detail_paragraphs`.\n"
+        "- Jangan gunakan format Markdown (tidak boleh `*` atau `**`). Gunakan `<strong>` jika perlu penekanan.\n"
+        "- Jangan gunakan tanda kutip ganda maupun petik tunggal di dalam string JSON.\n"
     )
 
     if omit_incorrect:
@@ -1218,11 +1244,24 @@ def generate_ai_explanations(
                     if retry_data is not None:
                         data = retry_data
 
-            correct_summary = str(data.get("correct_summary", "")).strip()
+            correct_summary = _strip_quotes(
+                _strip_markdown_emphasis(
+                str(data.get("correct_summary", "")).strip()
+                )
+            )
             detail_paragraphs = _normalize_detail_paragraphs(
                 data.get("detail_paragraphs")
             )
+            detail_paragraphs = [
+                _strip_quotes(_strip_markdown_emphasis(paragraph))
+                for paragraph in detail_paragraphs
+            ]
             incorrect_reasons = data.get("incorrect_reasons") or {}
+            if isinstance(incorrect_reasons, dict):
+                incorrect_reasons = {
+                    str(key): _strip_quotes(_strip_markdown_emphasis(str(value)))
+                    for key, value in incorrect_reasons.items()
+                }
             incorrect_reasons = _realign_incorrect_reasons(
                 incorrect_reasons, option_map, incorrect_indices
             )
@@ -1291,9 +1330,17 @@ def generate_ai_explanations(
                     incorrect_data = _parse_response(incorrect_raw)
                     reason = ""
                     if isinstance(incorrect_data, dict):
-                        reason = str(incorrect_data.get("reason", "")).strip()
+                        reason = _strip_quotes(
+                            _strip_markdown_emphasis(
+                                str(incorrect_data.get("reason", "")).strip()
+                            )
+                        )
                     if not reason:
-                        reason = str(incorrect_reasons.get(str(idx + 1), "")).strip()
+                        reason = _strip_quotes(
+                            _strip_markdown_emphasis(
+                                str(incorrect_reasons.get(str(idx + 1), "")).strip()
+                            )
+                        )
                     if is_tkp and reason:
                         reason = _filter_tkp_aspects(reason, tkp_expected_aspect)
                     if reason:
