@@ -55,9 +55,9 @@ def _should_skip_row(category_value: object, sub_category_value: object) -> Opti
 
     sub_norm = _normalize_label(sub_category_value)
     if sub_norm.startswith("figural"):
-        return "subkategori TIU figural di-skip."
+        return "subkategori TIU figural gunakan explanation."
     if sub_norm.startswith("numerik deret"):
-        return "subkategori TIU numerik deret di-skip."
+        return "subkategori TIU numerik deret gunakan explanation."
     return None
 
 
@@ -1072,7 +1072,20 @@ def generate_ai_explanations(
             skip_reason = _should_skip_row(row.get("category"), row.get("sub_category"))
             if skip_reason:
                 question_label = row.get("no") or row_idx
-                st.info(f"Lewati nomor {question_label}: {skip_reason}")
+                explanation_value = row.get("explanation")
+                if pd.isna(explanation_value):
+                    explanation_value = ""
+                explanation_text = str(explanation_value).strip()
+                df.at[row_idx, "explanation_ai"] = explanation_text
+                updated_rows.append(row_idx)
+                if explanation_text:
+                    st.info(
+                        f"Nomor {question_label}: {skip_reason} (diambil dari kolom explanation)."
+                    )
+                else:
+                    st.info(
+                        f"Nomor {question_label}: {skip_reason} (explanation kosong, dibiarkan kosong)."
+                    )
                 continue
 
             prompt_data = build_prompt(row)
