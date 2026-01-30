@@ -459,6 +459,14 @@ def _parse_response(raw_text: str) -> Optional[Dict[str, object]]:
         try:
             parsed = json.loads(repaired)
         except json.JSONDecodeError:
+            # Last-resort: aggressively escape backslashes to salvage LaTeX-heavy output.
+            try:
+                aggressive = candidate_text.replace("\\", "\\\\")
+                parsed = json.loads(aggressive)
+            except json.JSONDecodeError:
+                parsed = None
+        if parsed is not None:
+            return parsed
             start = raw_text.find("{")
             end = raw_text.rfind("}")
             if start != -1 and end != -1 and end > start:
@@ -973,6 +981,16 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
             "(minimal 3 kalimat) dan uraikan mengapa tiap opsi salah tidak memenuhi kriteria."
         )
 
+    if omit_incorrect:
+        detail_paragraph_rule = (
+            "- `detail_paragraphs` boleh memakai tag `<strong>`, `<em>`, dan "
+            "`<span class=\"math-tex\">\\( ... \\)</span>` untuk menulis rumus.\n"
+        )
+    else:
+        detail_paragraph_rule = (
+            "- `detail_paragraphs` dilarang berisi tag <p>, <table>, <br>, atau HTML lain.\n"
+        )
+
     instructions = (
         "Tulis pembahasan dalam bahasa Indonesia menggunakan HTML tanpa menambahkan <!DOCTYPE>, <html>, <head>, atau <body>. "
         f"{intro_text} "
@@ -984,7 +1002,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Jangan menuliskan label huruf seperti A/B/C atau label 'Opsi X' di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menambahkan bobot atau skor ke dalam teks opsi maupun alasan.\n"
         "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML; khusus `table_html` boleh berisi markup tabel.\n"
-        "- `detail_paragraphs` dilarang berisi tag <p>, <table>, <br>, atau HTML lain.\n"
+        f"{detail_paragraph_rule}"
         "- Khusus TIU Numerik, boleh menggunakan tag `<strong>` dan `<em>` di dalam `detail_paragraphs`.\n"
         "- Jangan gunakan format Markdown (tidak boleh `*` atau `**`). Gunakan `<strong>` jika perlu penekanan.\n"
         "- Jangan gunakan tanda kutip ganda maupun petik tunggal di dalam string JSON.\n"
@@ -1259,6 +1277,41 @@ def generate_ai_explanations(
 
             data = _parse_response(raw_text)
             if data is None:
+                retry_prompt = (
+                    prompt
+                    + "\n\nPERBAIKI FORMAT JSON:\n"
+                    "- Output harus JSON valid, tanpa teks tambahan.\n"
+                    "- Semua backslash di dalam string wajib di-escape ganda.\n"
+                    "- Semua rumus WAJIB ditulis sebagai "
+                    "`<span class=\"math-tex\">\\\\( ... \\\\)</span>` di dalam string.\n"
+                    "- Jangan gunakan tag <p> di detail_paragraphs.\n"
+                )
+                try:
+                    retry_response = model.generate_content(
+                        retry_prompt,
+                        generation_config={
+                            "response_mime_type": "application/json",
+                        },
+                    )
+                except Exception:
+                    retry_response = model.generate_content(retry_prompt)
+                retry_text = (retry_response.text or "").strip()
+                retry_text = retry_text.replace("```,", "```")
+                if retry_text.startswith("```"):
+                    retry_text = retry_text.strip()
+                    if retry_text.startswith("```json"):
+                        retry_text = retry_text[len("```json"):]
+                    retry_text = retry_text.strip("`").strip()
+                data = _parse_response(retry_text)
+                if data is None:
+                    question_label = row.get("no") or row_idx
+                    st.warning(
+                        f"Format respons tidak valid untuk nomor {question_label}. Mengabaikan pembaruan."
+                    )
+                    if raw_text:
+                        with st.expander(f"Detail respons AI untuk nomor {question_label}"):
+                            st.code(_truncate_text(raw_text), language="text")
+                    continue
                 question_label = row.get("no") or row_idx
                 st.warning(
                     f"Format respons tidak valid untuk nomor {question_label}. Mengabaikan pembaruan."
