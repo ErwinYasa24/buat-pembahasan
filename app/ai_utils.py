@@ -308,6 +308,10 @@ def _repair_json_text(raw_text: str) -> str:
                 result.append("\\r")
                 idx += 1
                 continue
+            if char == "\t":
+                result.append("\\t")
+                idx += 1
+                continue
             if char == "\\":
                 if idx + 1 < length:
                     nxt = raw_text[idx + 1]
@@ -322,6 +326,26 @@ def _repair_json_text(raw_text: str) -> str:
         result.append(char)
         idx += 1
     return "".join(result)
+
+
+def _strip_code_fences(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = cleaned.strip("`").strip()
+    if "```" in cleaned:
+        cleaned = cleaned.replace("```", "").strip()
+    return cleaned
+
+
+def _extract_json_candidate(raw_text: str) -> str:
+    cleaned = _strip_code_fences(raw_text)
+    cleaned = cleaned.strip("\ufeff").strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return cleaned[start : end + 1]
+    return cleaned
 
 
 def _strip_markdown_emphasis(text: str) -> str:
@@ -365,10 +389,11 @@ def _normalize_detail_paragraphs(value: object) -> List[str]:
 
 def _parse_response(raw_text: str) -> Optional[Dict[str, object]]:
     parsed: Optional[Dict[str, object]] = None
+    candidate_text = _extract_json_candidate(raw_text)
     try:
-        parsed = json.loads(raw_text)
+        parsed = json.loads(candidate_text)
     except json.JSONDecodeError:
-        repaired = _repair_json_text(raw_text)
+        repaired = _repair_json_text(candidate_text)
         try:
             parsed = json.loads(repaired)
         except json.JSONDecodeError:
@@ -896,10 +921,12 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "- Paragraf kedua (dan tambahan bila perlu) menjelaskan alasan jawaban benar secara detail (minimal 2 kalimat).\n"
         "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menambahkan bobot atau skor ke dalam teks opsi maupun alasan.\n"
-        "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML, kecuali `table_html` jika diminta.\n"
+        "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML; khusus `table_html` boleh berisi markup tabel.\n"
+        "- `detail_paragraphs` dilarang berisi tag <p>, <table>, <br>, atau HTML lain.\n"
         "- Khusus TIU Numerik, boleh menggunakan tag `<strong>` dan `<em>` di dalam `detail_paragraphs`.\n"
         "- Jangan gunakan format Markdown (tidak boleh `*` atau `**`). Gunakan `<strong>` jika perlu penekanan.\n"
         "- Jangan gunakan tanda kutip ganda maupun petik tunggal di dalam string JSON.\n"
+        "- Jika menulis rumus/LaTeX di JSON, semua backslash WAJIB di-escape (contoh: tulis `\\\\frac{1}{2}` dalam string JSON).\n"
     )
 
     if omit_incorrect:
