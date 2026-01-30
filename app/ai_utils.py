@@ -234,6 +234,60 @@ def _wrap_math_tex(text: str) -> str:
     return wrapped
 
 
+def _is_within_math_range(ranges: Sequence[tuple[int, int]], idx: int) -> bool:
+    for start, end in ranges:
+        if start <= idx < end:
+            return True
+    return False
+
+
+def _find_math_ranges(text: str) -> List[tuple[int, int]]:
+    ranges: List[tuple[int, int]] = []
+    for pattern in (r"\\\(.+?\\\)", r"\\\[.+?\\\]"):
+        for match in re.finditer(pattern, text):
+            ranges.append((match.start(), match.end()))
+    return ranges
+
+
+def _wrap_math_spans(text: str) -> str:
+    """Ensure math expressions are wrapped with <span class=\"math-tex\">."""
+
+    if not text:
+        return text
+    if "math-tex" in text:
+        return text
+
+    cleaned = text
+    cleaned = re.sub(
+        r"(\\\(.+?\\\))",
+        r'<span class="math-tex">\1</span>',
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"(\\\[.+?\\\])",
+        r'<span class="math-tex">\1</span>',
+        cleaned,
+    )
+
+    ranges = _find_math_ranges(cleaned)
+    frac_pattern = re.compile(r"(\\frac\{[^{}]+\}\{[^{}]+\})")
+    pieces: List[str] = []
+    last_idx = 0
+    for match in frac_pattern.finditer(cleaned):
+        start, end = match.span()
+        if _is_within_math_range(ranges, start):
+            continue
+        pieces.append(cleaned[last_idx:start])
+        latex = match.group(1)
+        pieces.append(f'<span class="math-tex">\\({latex}\\)</span>')
+        last_idx = end
+    if pieces:
+        pieces.append(cleaned[last_idx:])
+        cleaned = "".join(pieces)
+
+    return cleaned
+
+
 def _split_numeric_paragraphs(text: str) -> List[str]:
     cleaned = text.strip()
     cleaned = re.sub(r"^\s*<p[^>]*>", "", cleaned, flags=re.IGNORECASE)
@@ -315,11 +369,19 @@ def _repair_json_text(raw_text: str) -> str:
             if char == "\\":
                 if idx + 1 < length:
                     nxt = raw_text[idx + 1]
-                    if nxt in "\"\\/bfnrtu":
+                    if nxt in "\"\\/":
                         result.append(char)
                         result.append(nxt)
                         idx += 2
                         continue
+                    if nxt == "u" and idx + 5 < length:
+                        hex_seq = raw_text[idx + 2 : idx + 6]
+                        if all(ch in "0123456789abcdefABCDEF" for ch in hex_seq):
+                            result.append(char)
+                            result.append(nxt)
+                            result.extend(hex_seq)
+                            idx += 6
+                            continue
                 result.append("\\\\")
                 idx += 1
                 continue
@@ -919,7 +981,7 @@ def build_prompt(row: pd.Series) -> Dict[str, object]:
         "Aturan tambahan:\n"
         "- Paragraf pertama harus menyatakan jawaban benar dengan awalan 'Jawaban yang tepat:' diikuti penjelasan singkat. Sertakan teks opsi benar secara utuh sebelum penjelasan.\n"
         "- Paragraf kedua (dan tambahan bila perlu) menjelaskan alasan jawaban benar secara detail (minimal 2 kalimat).\n"
-        "- Jangan menuliskan label huruf seperti A/B/C di dalam isi jawaban. Fokus pada isi opsi saja.\n"
+        "- Jangan menuliskan label huruf seperti A/B/C atau label 'Opsi X' di dalam isi jawaban. Fokus pada isi opsi saja.\n"
         "- Jangan menambahkan bobot atau skor ke dalam teks opsi maupun alasan.\n"
         "- Semua nilai string dalam JSON harus berupa teks polos tanpa tag HTML; khusus `table_html` boleh berisi markup tabel.\n"
         "- `detail_paragraphs` dilarang berisi tag <p>, <table>, <br>, atau HTML lain.\n"
@@ -1444,13 +1506,13 @@ def generate_ai_explanations(
                         if _is_disallowed_detail(clean_part):
                             continue
                         math_content = _extract_math_content(part)
-                        if math_content is not None:
-                            math_buffer.append(math_content)
-                            continue
-                        flush_math_buffer()
-                        part_wrapped = _wrap_math_tex(part)
-                        html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
-                        explanation_paragraphs_added += 1
+                    if math_content is not None:
+                        math_buffer.append(math_content)
+                        continue
+                    flush_math_buffer()
+                    part_wrapped = _wrap_math_spans(_wrap_math_tex(part))
+                    html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
+                    explanation_paragraphs_added += 1
                 flush_math_buffer()
             else:
                 for paragraph in detail_paragraphs:
@@ -1486,7 +1548,9 @@ def generate_ai_explanations(
                         )
                     if _is_disallowed_detail(plain_check):
                         continue
-                    html_parts.append(_format_paragraph(plain_check, styled=use_style))
+                    html_parts.append(
+                        _format_paragraph(_wrap_math_spans(plain_check), styled=use_style)
+                    )
                     explanation_paragraphs_added += 1
 
             if (
