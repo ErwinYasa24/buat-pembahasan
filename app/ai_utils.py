@@ -410,6 +410,76 @@ def _extract_json_candidate(raw_text: str) -> str:
     return cleaned
 
 
+def _unescape_json_string(value: str) -> str:
+    if not value:
+        return value
+    return (
+        value.replace("\\\\", "\\")
+        .replace("\\\"", "\"")
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+    )
+
+
+def _fallback_parse_loose(raw_text: str) -> Optional[Dict[str, object]]:
+    text = _extract_json_candidate(raw_text)
+    if not text:
+        return None
+
+    def find_string(key: str) -> Optional[str]:
+        match = re.search(
+            rf"\"{re.escape(key)}\"\s*:\s*\"((?:\\.|[^\"\\])*)\"",
+            text,
+            flags=re.DOTALL,
+        )
+        if not match:
+            return None
+        return _unescape_json_string(match.group(1)).strip()
+
+    detail_items: List[str] = []
+    detail_match = re.search(
+        r"\"detail_paragraphs\"\s*:\s*\[(.*?)\]",
+        text,
+        flags=re.DOTALL,
+    )
+    if detail_match:
+        detail_block = detail_match.group(1)
+        for item in re.findall(
+            r"\"((?:\\.|[^\"\\])*)\"",
+            detail_block,
+            flags=re.DOTALL,
+        ):
+            cleaned = _unescape_json_string(item).strip()
+            if cleaned:
+                detail_items.append(cleaned)
+
+    incorrect_map: Dict[str, str] = {}
+    incorrect_match = re.search(
+        r"\"incorrect_reasons\"\s*:\s*\{(.*?)\}",
+        text,
+        flags=re.DOTALL,
+    )
+    if incorrect_match:
+        incorrect_block = incorrect_match.group(1)
+        for key, value in re.findall(
+            r"\"([^\"]+)\"\s*:\s*\"((?:\\.|[^\"\\])*)\"",
+            incorrect_block,
+            flags=re.DOTALL,
+        ):
+            incorrect_map[str(key).strip()] = _unescape_json_string(value).strip()
+
+    correct_summary = find_string("correct_summary") or ""
+    if not correct_summary and not detail_items and not incorrect_map:
+        return None
+
+    return {
+        "correct_summary": correct_summary,
+        "detail_paragraphs": detail_items,
+        "incorrect_reasons": incorrect_map,
+    }
+
+
 def _strip_markdown_emphasis(text: str) -> str:
     if not text:
         return text
@@ -467,18 +537,24 @@ def _parse_response(raw_text: str) -> Optional[Dict[str, object]]:
                 parsed = None
         if parsed is not None:
             return parsed
-            start = raw_text.find("{")
-            end = raw_text.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                candidate = raw_text[start : end + 1]
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidate = raw_text[start : end + 1]
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                repaired_candidate = _repair_json_text(candidate)
                 try:
-                    parsed = json.loads(candidate)
+                    parsed = json.loads(repaired_candidate)
                 except json.JSONDecodeError:
-                    repaired_candidate = _repair_json_text(candidate)
-                    try:
-                        parsed = json.loads(repaired_candidate)
-                    except json.JSONDecodeError:
-                        parsed = None
+                    parsed = None
+        if parsed is not None:
+            return parsed
+
+        fallback = _fallback_parse_loose(raw_text)
+        if fallback is not None:
+            return fallback
 
     return parsed
 
