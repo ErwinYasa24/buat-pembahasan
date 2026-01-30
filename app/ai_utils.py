@@ -1635,13 +1635,15 @@ def generate_ai_explanations(
                         if _is_disallowed_detail(clean_part):
                             continue
                         math_content = _extract_math_content(part)
-                    if math_content is not None:
-                        math_buffer.append(math_content)
-                        continue
-                    flush_math_buffer()
-                    part_wrapped = _wrap_math_spans(_wrap_math_tex(part))
-                    html_parts.append(_format_paragraph(part_wrapped, styled=use_style))
-                    explanation_paragraphs_added += 1
+                        if math_content is not None:
+                            math_buffer.append(math_content)
+                            continue
+                        flush_math_buffer()
+                        part_wrapped = _wrap_math_spans(_wrap_math_tex(part))
+                        html_parts.append(
+                            _format_paragraph(part_wrapped, styled=use_style)
+                        )
+                        explanation_paragraphs_added += 1
                 flush_math_buffer()
             else:
                 for paragraph in detail_paragraphs:
